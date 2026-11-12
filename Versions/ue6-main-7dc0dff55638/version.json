@@ -1,0 +1,31 @@
+{
+    "commit":  "7dc0dff55638417c9cbc3853fe8084d80095fd50",
+    "branch":  "ue6-main",
+    "commitDate":  "2026-11-09T11:20:26-05:00",
+    "generatedDate":  "2026-11-13",
+    "verified":  true,
+    "verifiedDate":  "2026-11-13",
+    "patches":  [
+                    "debugger-constructor-self",
+                    "verse-simulation-sleep"
+                ],
+    "estimatedGitDependenciesDownloadMB":  990,
+    "windowsSdk":  {
+                       "minVersion":  "10.0.26100.0",
+                       "maxVersion":  "10.9.99999.0",
+                       "visualStudioComponent":  "Microsoft.VisualStudio.Component.Windows11SDK.26100"
+                   },
+    "visualCpp":  {
+                      "minVersion":  "14.50.35723",
+                      "maxVersionExclusive":  "14.52",
+                      "bannedVersions":  [
+                                             "14.51.0-14.51.99999",
+                                             "14.50.0-14.50.35722"
+                                         ],
+                      "minimumVisualStudioVersion":  "17.14",
+                      "visualStudioVersion":  "18.0",
+                      "visualStudioComponent":  "Microsoft.VisualStudio.Component.VC.14.50.18.0.x86.x64",
+                      "clangMajorVersion":  20
+                  },
+    "notes":  "The last commit before verse.exe stopped calling Main (f2079f45e2bf). Setup into an empty folder builds verse.exe, runs every sample with the same output as ue6-main-f9f48a4bf1b9, and the debugger steps through Timers."
+}
