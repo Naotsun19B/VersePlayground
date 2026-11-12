@@ -5,6 +5,9 @@
     "generatedDate":  "2026-11-12",
     "verified":  true,
     "verifiedDate":  "2026-11-12",
+    "patches":  [
+                    "debugger-constructor-self"
+                ],
     "estimatedGitDependenciesDownloadMB":  989,
     "windowsSdk":  {
                        "minVersion":  "10.0.26100.0",

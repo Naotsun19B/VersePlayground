@@ -1,0 +1,25 @@
+Title: Debugging inside a <constructor> function no longer ends the program
+
+The engine calls the wrapper that it generates for every <constructor> function without a Self. The debugger
+expects every frame to have one, and ends verse.exe as soon as it lists a call stack with such a frame in it: after
+stepping into a constructor function, at a breakpoint inside one, or in any function it calls. This patch treats
+the wrapper like a function that takes no Self, so the call stack and the variables show normally.
+
+diff --git a/Engine/Source/Runtime/CoreUObject/Private/VerseVM/VVMDebugger.cpp b/Engine/Source/Runtime/CoreUObject/Private/VerseVM/VVMDebugger.cpp
+index 0f9f40794805..6710d40c9d82 100644
+--- a/Engine/Source/Runtime/CoreUObject/Private/VerseVM/VVMDebugger.cpp
++++ b/Engine/Source/Runtime/CoreUObject/Private/VerseVM/VVMDebugger.cpp
+@@ -140,11 +140,8 @@
+ 		}
+ 		FRegisters Registers;
+ 		VValue SelfValue = Frame->Registers[FRegisterIndex::SELF].Get(Context);
+-		V_DIE_IF_MSG(
+-			SelfValue.IsUninitialized(),
+-			"`Self` should have been bound by now for methods, and set to `GlobalFalse()` for functions. "
+-			"This indicates either a codegen issue, or a failure in `CallWithSelf`!");
+-		if (IsFalse(SelfValue))
++		// VersePlayground: the wrapper of a <constructor> function is called with no Self, so treat it as a function.
++		if (SelfValue.IsUninitialized() || IsFalse(SelfValue))
+ 		{
+ 			Registers.Reserve(Frame->Procedure->NumRegisterNames);
+ 		}

@@ -6,6 +6,7 @@ import * as path from 'node:path';
 import { BreakpointEvent, DebugSession, Event, InitializedEvent, OutputEvent, TerminatedEvent } from '@vscode/debugadapter';
 import type { DebugProtocol } from '@vscode/debugprotocol';
 
+import { getServerFrames, isConstructorWrapperFrame, toClientStackTrace } from './debug-frames.ts';
 import { toClientVariables } from './debug-values.ts';
 import { DEBUGGER_PORT, encodeHandshake, encodeMessage, MessageReader } from './debug-wire.ts';
 import type { FirstBreakpoint } from './debug-wire.ts';
@@ -33,6 +34,15 @@ const CONNECT_RETRY_DELAY_MS = 200;
 
 /** How long VS Code may take to open the terminal for verse.exe. */
 const RUN_IN_TERMINAL_TIMEOUT_MS = 10_000;
+
+/** How many times in a row a step may be repeated to leave the wrapper of a <constructor> function. */
+const MAX_WRAPPER_STEPS = 4;
+
+/** Step commands, which verse.exe also reports as the reason of the stop they end with. */
+const STEP_COMMANDS = ['next', 'stepIn', 'stepOut'] as const;
+
+/** One of the step commands. */
+type StepCommand = typeof STEP_COMMANDS[number];
 
 /** Requests passed to verse.exe unchanged apart from moving the command name into "type". */
 type ForwardedCommand = 'threads' | 'stackTrace' | 'scopes' | 'variables' | 'continue' | 'next' | 'stepIn' | 'stepOut' |
@@ -97,6 +107,9 @@ export class VerseDebugSession extends DebugSession {
 
   // Whether the program ended or the session reported its end, so it is reported only once.
   private hasTerminated = false;
+
+  // Steps repeated since the last stop reported to VS Code, to leave the wrapper of a <constructor> function.
+  private wrapperStepCount = 0;
 
   constructor() {
     super();
@@ -324,13 +337,7 @@ export class VerseDebugSession extends DebugSession {
 
     switch (serverMessage.type) {
       case 'stopped': {
-        const stoppedBody = serverMessage.body ?? {};
-        const hitBreakpointId = stoppedBody.hitBreakpointId;
-        this.sendEvent(new Event('stopped', {
-          reason: stoppedBody.reason ?? 'pause',
-          threadId: stoppedBody.threadId ?? 0,
-          hitBreakpointIds: (typeof hitBreakpointId === 'number' ? [hitBreakpointId] : undefined),
-        }));
+        void this.reportStopped(serverMessage.body ?? {});
         break;
       }
       case 'breakpointChanged': {
@@ -342,6 +349,33 @@ export class VerseDebugSession extends DebugSession {
         break;
       }
     }
+  }
+
+  /**
+   * Passes a stop on to VS Code. A step that ends in the wrapper of a <constructor> function is repeated instead,
+   * because the wrapper is hidden from the call stack and stopping there would look like a step that did nothing.
+   * Stepping in from the wrapper enters the function body, and stepping over or out of it returns to the caller.
+   */
+  private async reportStopped(stoppedBody: Record<string, unknown>): Promise<void> {
+    const threadId = stoppedBody.threadId ?? 0;
+    const stepCommand = toStepCommand(stoppedBody.reason);
+    if (stepCommand !== undefined && this.wrapperStepCount < MAX_WRAPPER_STEPS) {
+      const serverResponse = await this.sendToServer('stackTrace', { threadId });
+      const topFrame = getServerFrames(serverResponse.body ?? {})[0];
+      if (serverResponse.success !== false && topFrame !== undefined && isConstructorWrapperFrame(topFrame)) {
+        this.wrapperStepCount++;
+        await this.sendToServer(stepCommand, { threadId });
+        return;
+      }
+    }
+
+    this.wrapperStepCount = 0;
+    const hitBreakpointId = stoppedBody.hitBreakpointId;
+    this.sendEvent(new Event('stopped', {
+      reason: stoppedBody.reason ?? 'pause',
+      threadId,
+      hitBreakpointIds: (typeof hitBreakpointId === 'number' ? [hitBreakpointId] : undefined),
+    }));
   }
 
   /** Sends a request to the debugger and passes its answer back to VS Code. */
@@ -413,23 +447,9 @@ export class VerseDebugSession extends DebugSession {
   }
 }
 
-/**
- * Turns verse.exe's stack frames into DAP frames. Frames of runtime helpers such as __SpawnReturnImpl__ have a
- * "path" that is not a file, so they lose their source and are shown dimmed, and unknown columns become column 1.
- */
-export function toClientStackTrace(serverBody: Record<string, unknown>): DebugProtocol.StackTraceResponse['body'] {
-  const serverFrames = (Array.isArray(serverBody.stackFrames) ? serverBody.stackFrames : []) as DebugProtocol.StackFrame[];
-  const stackFrames = serverFrames.map((serverFrame): DebugProtocol.StackFrame => {
-    const framePath = serverFrame.source?.path;
-    const isFile = (framePath !== undefined && /[\\/]/.test(framePath));
-    return {
-      ...serverFrame,
-      column: Math.max(1, serverFrame.column),
-      source: (isFile ? { name: path.basename(framePath), path: framePath } : undefined),
-      presentationHint: (isFile ? 'normal' : 'subtle'),
-    };
-  });
-  return { stackFrames, totalFrames: stackFrames.length };
+/** Returns the step command that a stop reason names, or undefined when the stop did not end a step. */
+function toStepCommand(reason: unknown): StepCommand | undefined {
+  return STEP_COMMANDS.find((stepCommand) => stepCommand === reason);
 }
 
 /** Connects to verse.exe's debugger, retrying while the process starts and opens the port. */

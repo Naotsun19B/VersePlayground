@@ -2,7 +2,7 @@
   "name": "verse-playground",
   "displayName": "Verse Playground",
   "description": "Run, debug and edit single Verse programs with the verse.exe that VersePlayground builds from Unreal Engine 6.",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publisher": "naotsun19b",
   "license": "MIT",
   "repository": {
