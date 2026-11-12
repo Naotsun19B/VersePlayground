@@ -16,7 +16,8 @@ Verse のコマンドラインツール `verse.exe` をビルドします。あ�
 |---|---|
 | Unreal Engine のソースへのアクセス権 | GitHub アカウントを Epic Games アカウントに連携し、`EpicGames/UnrealEngine` を見られる状態にしておく（[手順](https://www.unrealengine.com/ue-on-github)） |
 | Git for Windows | 2.27 以降 |
-| Visual Studio | 「C++ によるデスクトップ開発」ワークロードと Windows 10/11 SDK。コンパイラはエンジンに同梱のものが使われる |
+| Visual Studio | 「C++ によるデスクトップ開発」ワークロード。コンパイラはエンジンに同梱のものが使われる |
+| Windows SDK | エンジンが求める版（現在のバージョンでは 10.0.26100.0 以降）。無ければ Setup が Visual Studio Installer での追加を提案する |
 | ディスク | 約 10 GB（取得・展開したファイル約 5 GB、ビルドの中間ファイル約 2.5 GB、ダウンロードのキャッシュ約 1 GB） |
 | メモリ | 16 GB 以上を推奨。並列コンパイル数はメモリ量から自動で決める |
 
@@ -27,6 +28,9 @@ Verse のコマンドラインツール `verse.exe` をビルドします。あ�
 1. このリポジトリを clone する。
 2. `Setup.bat` をダブルクリックする。
 3. バージョンを選ぶ。Enter で、動作確認済みの最新版が選ばれる。
+   そのバージョンが必要とする Windows SDK が無い場合は、ダウンロードの前に知らせ、インストールするかを尋ねる。
+   インストール時は管理者権限を求められ、Visual Studio は閉じておく必要がある。
+   `-InstallWindowsSdk Yes` / `-InstallWindowsSdk No` を付けると質問せずに決める。
 4. 初回は GitHub へのサインインを求められるので、Unreal Engine のリポジトリにアクセスできるアカウントでサインインする。
 5. 取得とビルドが終わると、`Samples/HelloWorld/HelloWorld.verse` が実行されて `Hello, World!` と表示される。
 6. VS Code が入っていれば、Verse Playground 拡張を入れるかを尋ねられる（[VS Code](#vs-code) を参照）。
@@ -103,7 +107,7 @@ UEFN が無くても、表のそれ以外の機能は使えます。
 |---|---|
 | `sparse-paths.txt` | git の sparse checkout で取得するディレクトリ |
 | `gitdepsignore.txt` | エンジンの `GitDependencies` が取得するバイナリ依存のホワイトリスト。Setup が `.gitdepsignore` としてコピーする |
-| `version.json` | コミット、確認したかどうか、ダウンロード量の見積もり |
+| `version.json` | コミット、確認したかどうか、ダウンロード量の見積もり、エンジンが必要とする Windows SDK |
 
 Setup は確認済み（`"verified": true`）のバージョンを既定にします。確認していないバージョンを選ぶと警告を表示します。
 `-Version` にフォルダ名かコミットの先頭部分を渡すと、質問せずにそのバージョンを使います。

@@ -16,7 +16,8 @@ Setup fetches the engine source from the Epic Games repository on GitHub with yo
 |---|---|
 | Access to the Unreal Engine source | Link your GitHub account to your Epic Games account so that you can see `EpicGames/UnrealEngine` ([instructions](https://www.unrealengine.com/ue-on-github)) |
 | Git for Windows | 2.27 or later |
-| Visual Studio | The "Desktop development with C++" workload and a Windows 10/11 SDK. The build uses the compiler bundled with the engine |
+| Visual Studio | The "Desktop development with C++" workload. The build uses the compiler bundled with the engine |
+| Windows SDK | The version the engine needs (10.0.26100.0 or later for the current version). When it is missing, Setup offers to add it with the Visual Studio Installer |
 | Disk | About 10 GB (about 5 GB of fetched and extracted files, 2.5 GB of intermediate build files, and 1 GB of download cache) |
 | Memory | 16 GB or more is recommended. Setup chooses the number of parallel compile processes from the installed memory |
 
@@ -27,6 +28,9 @@ Setup downloads about 230 MB with git and about 1 GB of binary dependencies. Fet
 1. Clone this repository.
 2. Double-click `Setup.bat`.
 3. Choose a version. Pressing Enter picks the newest verified version.
+   If that version needs a Windows SDK you do not have, Setup says so before downloading anything and offers to
+   install it. Windows asks for administrator permission, and Visual Studio must be closed while it installs.
+   `-InstallWindowsSdk Yes` or `-InstallWindowsSdk No` answers without asking.
 4. The first time, Git asks you to sign in to GitHub. Sign in with the account that has access to the Unreal Engine
    repository.
 5. When fetching and building finish, Setup runs `Samples/HelloWorld/HelloWorld.verse` and prints `Hello, World!`.
@@ -106,7 +110,7 @@ UEFN, everything else in the table still works.
 |---|---|
 | `sparse-paths.txt` | Directories that git fetches with sparse checkout |
 | `gitdepsignore.txt` | Whitelist of binary dependencies for the engine's `GitDependencies`. Setup copies it to `.gitdepsignore` |
-| `version.json` | The commit, whether it has been verified, and the estimated download size |
+| `version.json` | The commit, whether it has been verified, the estimated download size, and the Windows SDK the engine needs |
 
 Setup defaults to a verified version (`"verified": true`) and warns when you choose one that has not been verified.
 Pass a folder name or the start of a commit hash to `-Version` to use that version without being asked.

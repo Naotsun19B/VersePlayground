@@ -7,12 +7,14 @@ Downloads the minimum of Unreal Engine needed to build the Verse command-line to
 .DESCRIPTION
 Setup.bat in the repository root runs this script. It:
 
-  1. Checks that Git, Visual Studio with the C++ workload, and a Windows SDK are installed.
+  1. Checks that Git and Visual Studio with the C++ workload are installed.
   2. Lets you choose one of the verified engine versions under Versions/.
-  3. Fetches only that commit, and only the directories listed for it, from the Unreal Engine repository.
-  4. Downloads only the binary dependencies listed for it.
-  5. Builds verse.exe and runs Samples/HelloWorld/HelloWorld.verse to confirm that it works.
-  6. Offers to install the Verse Playground extension into VS Code.
+  3. Checks that the Windows SDK that version needs is installed, and offers to install it with the Visual Studio
+     Installer when it is not.
+  4. Fetches only that commit, and only the directories listed for it, from the Unreal Engine repository.
+  5. Downloads only the binary dependencies listed for it.
+  6. Builds verse.exe and runs Samples/HelloWorld/HelloWorld.verse to confirm that it works.
+  7. Offers to install the Verse Playground extension into VS Code.
 
 Your GitHub account must have access to the Unreal Engine repository. Git asks you to sign in the first time.
 
@@ -33,6 +35,10 @@ checkouts at one folder to download each file only once.
 .PARAMETER MaxParallelActions
 Number of compile processes. Defaults to a value based on the installed memory, since each compile process can
 use around 3 GB.
+
+.PARAMETER InstallWindowsSdk
+Whether to install the Windows SDK that the engine needs when it is missing: Ask (default), Yes or No. Installing
+it runs the Visual Studio Installer, which asks Windows for administrator permission.
 
 .PARAMETER InstallExtension
 Whether to install the VS Code extension in Extension/verse-playground.vsix: Ask (default), Yes or No.
@@ -56,6 +62,9 @@ param(
     [int] $MaxParallelActions = 0,
 
     [ValidateSet('Ask', 'Yes', 'No')]
+    [string] $InstallWindowsSdk = 'Ask',
+
+    [ValidateSet('Ask', 'Yes', 'No')]
     [string] $InstallExtension = 'Ask'
 )
 
@@ -67,6 +76,9 @@ $VersionsDir = Join-Path $RepoRoot 'Versions'
 $LocalStateFile = Join-Path $RepoRoot 'VersePlayground.local.json'
 $LocalBranch = 'verseplayground'
 $MinimumGitVersion = [version] '2.27'
+$VsWherePath = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+$VsInstallerPath = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\setup.exe'
+$WindowsKitsKey = 'HKLM:\SOFTWARE\Microsoft\Windows Kits\Installed Roots'
 
 function Write-Step {
     param([string] $Message)
@@ -100,26 +112,140 @@ function Test-Prerequisites {
     }
     Write-Host "Git $gitVersionText"
 
-    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-    $visualStudio = $null
-    if (Test-Path -LiteralPath $vswhere) {
-        $visualStudio = & $vswhere -latest -products * `
-            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
-            -property displayName
-    }
-    if (-not $visualStudio) {
+    $visualStudio = Get-VisualStudio
+    if ($null -eq $visualStudio) {
         throw ('Visual Studio with the "Desktop development with C++" workload was not found. ' +
             'Install it with the Visual Studio Installer and run Setup again.')
     }
-    Write-Host "$visualStudio"
+    Write-Host "$($visualStudio.DisplayName)"
+}
 
-    $windowsKits = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows Kits\Installed Roots' `
-        -Name KitsRoot10 -ErrorAction SilentlyContinue
-    if ($null -eq $windowsKits) {
-        throw ('No Windows 10/11 SDK was found. Add a Windows SDK in the Visual Studio Installer ' +
-            '(Individual components) and run Setup again.')
+# Returns the newest Visual Studio that has the C++ build tools, or $null when there is none.
+function Get-VisualStudio {
+    if (-not (Test-Path -LiteralPath $VsWherePath)) {
+        return $null
     }
-    Write-Host "Windows SDK at $($windowsKits.KitsRoot10)"
+
+    $requiredComponent = 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64'
+    $displayName = & $VsWherePath -latest -products * -requires $requiredComponent -property displayName
+    if (-not $displayName) {
+        return $null
+    }
+    $installationPath = & $VsWherePath -latest -products * -requires $requiredComponent -property installationPath
+    return [pscustomobject] @{
+        DisplayName = "$displayName"
+        InstallationPath = "$installationPath"
+    }
+}
+
+# Lists the Windows 10/11 SDK versions that have their headers installed, the same way UnrealBuildTool finds them:
+# a version folder under Include/ of the Windows Kits root that contains um/Windows.h.
+function Get-InstalledWindowsSdkVersions {
+    $windowsKits = Get-ItemProperty -Path $WindowsKitsKey -Name KitsRoot10 -ErrorAction SilentlyContinue
+    if ($null -eq $windowsKits) {
+        return @()
+    }
+
+    $includeDir = Join-Path $windowsKits.KitsRoot10 'Include'
+    if (-not (Test-Path -LiteralPath $includeDir)) {
+        return @()
+    }
+    $versions = foreach ($folder in Get-ChildItem -LiteralPath $includeDir -Directory) {
+        $sdkVersion = $null
+        if (
+            [version]::TryParse($folder.Name, [ref] $sdkVersion) -and
+            (Test-Path -LiteralPath (Join-Path $folder.FullName 'um\Windows.h'))
+        ) {
+            $sdkVersion
+        }
+    }
+    return @($versions | Sort-Object)
+}
+
+# Makes sure a Windows SDK that the chosen engine version accepts is installed, before anything is downloaded.
+# UnrealBuildTool only reports an unsuitable SDK when the build starts, after the engine has been fetched.
+function Confirm-WindowsSdk {
+    param([object] $EngineVersion)
+
+    Write-Step 'Checking the Windows SDK'
+
+    $installedVersions = @(Get-InstalledWindowsSdkVersions)
+    $requirement = $EngineVersion.WindowsSdk
+    if ($null -eq $requirement) {
+        Write-Warning "$($EngineVersion.Name) does not record which Windows SDK it needs, so it is not checked."
+        return
+    }
+
+    $minimumVersion = [version] $requirement.minVersion
+    $maximumVersion = [version] $requirement.maxVersion
+    $suitableVersions = @($installedVersions |
+        Where-Object { $_ -ge $minimumVersion -and $_ -le $maximumVersion })
+    if ($suitableVersions.Count -gt 0) {
+        Write-Host "Windows SDK $($suitableVersions[-1])"
+        return
+    }
+
+    # Setup.bat runs Windows PowerShell 5.1, which has no ternary operator.
+    $installedText = if ($installedVersions.Count -gt 0) { $installedVersions -join ', ' } else { 'none' }
+    Write-Warning ("$($EngineVersion.Name) needs Windows SDK $minimumVersion or later, which is not installed " +
+        "(installed: $installedText). The build fails without it.")
+    $manualSteps = ('Add "Windows 11 SDK ({0})" in the Visual Studio Installer (Modify > Individual components), ' +
+        'then run Setup again.') -f $minimumVersion
+
+    $shouldInstall = $InstallWindowsSdk -eq 'Yes'
+    if ($InstallWindowsSdk -eq 'Ask') {
+        Write-Host ('Setup can install it now with the Visual Studio Installer. Windows asks for administrator ' +
+            'permission, and Visual Studio must be closed while it installs.')
+        $answer = Read-Host "Install Windows SDK $minimumVersion now? [Y/n]"
+        $shouldInstall = [string]::IsNullOrWhiteSpace($answer) -or $answer -match '^[Yy]'
+    }
+    if (-not $shouldInstall) {
+        throw "Windows SDK $minimumVersion is required. $manualSteps"
+    }
+
+    Install-WindowsSdk -Component $requirement.visualStudioComponent -ManualSteps $manualSteps
+
+    $installedVersions = @(Get-InstalledWindowsSdkVersions)
+    $suitableVersions = @($installedVersions |
+        Where-Object { $_ -ge $minimumVersion -and $_ -le $maximumVersion })
+    if ($suitableVersions.Count -eq 0) {
+        throw "The Visual Studio Installer finished, but Windows SDK $minimumVersion is still not found. $manualSteps"
+    }
+    Write-Host "Windows SDK $($suitableVersions[-1])"
+}
+
+# Adds one component to the installed Visual Studio with its installer, which elevates through a UAC prompt.
+function Install-WindowsSdk {
+    param([string] $Component, [string] $ManualSteps)
+
+    $visualStudio = Get-VisualStudio
+    if ($null -eq $visualStudio -or -not (Test-Path -LiteralPath $VsInstallerPath)) {
+        throw "The Visual Studio Installer was not found. $ManualSteps"
+    }
+
+    Write-Host "Installing $Component into $($visualStudio.DisplayName)..."
+    # --passive shows the installer's progress without asking anything, and --norestart leaves restarting to the
+    # user. The installer path goes in quotes because Start-Process joins the arguments into one command line.
+    $installerArguments = @(
+        'modify',
+        '--installPath', "`"$($visualStudio.InstallationPath)`"",
+        '--add', $Component,
+        '--passive',
+        '--norestart'
+    )
+    try {
+        $installer = Start-Process -FilePath $VsInstallerPath -ArgumentList $installerArguments -Verb RunAs `
+            -Wait -PassThru
+    }
+    catch {
+        throw "The Visual Studio Installer did not start (administrator permission was refused?). $ManualSteps"
+    }
+
+    # 3010 means the component was installed and Windows wants a restart, which the build does not need.
+    if ($installer.ExitCode -ne 0 -and $installer.ExitCode -ne 3010) {
+        throw ("The Visual Studio Installer failed with exit code $($installer.ExitCode). Close Visual Studio " +
+            "and try again. $ManualSteps")
+    }
 }
 
 # Reads every Versions/<folder>/version.json, newest commit first.
@@ -136,6 +262,8 @@ function Get-EngineVersions {
                 CommitDate = [datetimeoffset] $info.commitDate
                 Verified = [bool] $info.verified
                 Notes = $info.notes
+                # Versions generated before the Windows SDK was recorded have no windowsSdk entry.
+                WindowsSdk = $(if ($info.PSObject.Properties['windowsSdk']) { $info.windowsSdk } else { $null })
             }
         }
     }
@@ -323,6 +451,7 @@ $engineVersion = Select-EngineVersion -Versions (Get-EngineVersions)
 if (-not $engineVersion.Verified) {
     Write-Warning "$($engineVersion.Name) has not been verified. The build may fail."
 }
+Confirm-WindowsSdk -EngineVersion $engineVersion
 Update-EngineCheckout -EngineVersion $engineVersion
 Update-BinaryDependencies -EngineVersion $engineVersion
 Invoke-VerseBuild

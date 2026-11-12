@@ -11,7 +11,7 @@ combines it with the rules in ManifestRules.psd1, and writes three files to Vers
 
   sparse-paths.txt  Directories for git sparse checkout (cone mode).
   gitdepsignore.txt Whitelist that Setup.ps1 copies to .gitdepsignore so GitDependencies downloads only these files.
-  version.json      Commit information and the verification state.
+  version.json      Commit information, the Windows SDK the engine requires, and the verification state.
 
 The generated version starts as unverified. Run Setup.ps1 -Version <folder> into an empty folder, and when
 verse.exe builds and runs the samples, set "verified" to true and fill "verifiedDate" in version.json.
@@ -121,10 +121,30 @@ function Get-GitValue {
     return (@($output)[0]).Trim()
 }
 
+# Reads the Windows SDK range that UnrealBuildTool accepts for Win64, and the Visual Studio Installer component that
+# installs the SDK the engine is built against. Setup.ps1 compares the range with the installed SDKs before it
+# downloads anything, because UnrealBuildTool rejects the platform only once the build starts.
+function Get-WindowsSdkRequirement {
+    $sdkConfigPath = Join-Path $EngineDir 'Engine\Config\Windows\Windows_SDK.json'
+    $sdkConfig = Get-Content -LiteralPath $sdkConfigPath -Raw | ConvertFrom-Json
+    $component = @($sdkConfig.VisualStudioSuggestedComponents |
+        Where-Object { $_ -match '^Microsoft\.VisualStudio\.Component\.Windows1[01]SDK\.[0-9]+$' })
+    if ($component.Count -ne 1) {
+        throw "Expected one Windows SDK component in VisualStudioSuggestedComponents of $sdkConfigPath."
+    }
+    return [ordered]@{
+        minVersion = $sdkConfig.MinVersion
+        maxVersion = $sdkConfig.MaxVersion
+        visualStudioComponent = $component[0]
+    }
+}
+
 $commit = Get-GitValue -Arguments @('rev-parse', 'HEAD')
 $branch = Get-GitValue -Arguments @('rev-parse', '--abbrev-ref', 'HEAD')
 $commitDate = Get-GitValue -Arguments @('log', '-1', '--format=%cI')
 Write-Host "Engine commit: $commit ($branch, $commitDate)"
+$windowsSdk = Get-WindowsSdkRequirement
+Write-Host "Windows SDK: $($windowsSdk.minVersion) to $($windowsSdk.maxVersion) ($($windowsSdk.visualStudioComponent))"
 
 # Export the module graph of the target. UnrealBuildTool resolves every module, plugin and external library the
 # target uses, including the ones that are only used for their headers.
@@ -245,6 +265,7 @@ $version = [ordered]@{
     verified = $false
     verifiedDate = $null
     estimatedGitDependenciesDownloadMB = $downloadMegabytes
+    windowsSdk = $windowsSdk
     notes = $Notes
 }
 
