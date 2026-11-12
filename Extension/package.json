@@ -2,7 +2,7 @@
   "name": "verse-playground",
   "displayName": "Verse Playground",
   "description": "Run, debug and edit single Verse programs with the verse.exe that VersePlayground builds from Unreal Engine 6.",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "publisher": "naotsun19b",
   "license": "MIT",
   "repository": {
@@ -52,7 +52,8 @@
       {
         "command": "versePlayground.runWithArguments",
         "title": "Run Verse File with Arguments...",
-        "category": "Verse"
+        "category": "Verse",
+        "icon": "$(play-circle)"
       },
       {
         "command": "versePlayground.debug",
@@ -63,7 +64,8 @@
       {
         "command": "versePlayground.debugWithArguments",
         "title": "Debug Verse File with Arguments...",
-        "category": "Verse"
+        "category": "Verse",
+        "icon": "$(debug-alt-small)"
       },
       {
         "command": "versePlayground.restartLanguageServer",
@@ -76,6 +78,16 @@
         "command": "versePlayground.run",
         "key": "ctrl+f5",
         "when": "editorLangId == verse"
+      },
+      {
+        "command": "versePlayground.debug",
+        "key": "f5",
+        "when": "editorLangId == verse && !inDebugMode"
+      },
+      {
+        "command": "versePlayground.debugWithArguments",
+        "key": "shift+f5",
+        "when": "editorLangId == verse && !inDebugMode"
       },
       {
         "command": "versePlayground.runWithArguments",
@@ -91,9 +103,19 @@
           "group": "navigation@1"
         },
         {
-          "command": "versePlayground.debug",
+          "command": "versePlayground.runWithArguments",
           "when": "editorLangId == verse",
           "group": "navigation@2"
+        },
+        {
+          "command": "versePlayground.debug",
+          "when": "editorLangId == verse",
+          "group": "navigation@3"
+        },
+        {
+          "command": "versePlayground.debugWithArguments",
+          "when": "editorLangId == verse",
+          "group": "navigation@4"
         }
       ],
       "commandPalette": [
