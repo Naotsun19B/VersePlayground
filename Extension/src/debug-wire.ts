@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Naotsun
+
 /**
  * Wire format of the Verse VM socket debugger that verse.exe starts with --wait-for-debugger or --enable-debugger.
  *

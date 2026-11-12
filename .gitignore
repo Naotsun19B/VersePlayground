@@ -7,6 +7,8 @@
 # VS Code extension build output. verse-playground.vsix itself is committed so that users need no Node.js.
 /Extension/node_modules/
 /Extension/dist/
+# Copied from the repository root by every extension build, so that vsce packages it.
+/Extension/LICENSE
 # Copied from the user's engine checkout at run time; never committed or packaged.
 /Extension/syntaxes/
 

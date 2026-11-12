@@ -147,3 +147,12 @@ npm run package
 
 This type-checks, runs the tests and writes `Extension/verse-playground.vsix`. Commit the new `.vsix` so that users
 need no Node.js.
+
+## License
+
+The scripts, tools and VS Code extension in this repository are released under the [MIT License](LICENSE).
+
+The programs in `Samples/` are for learning. Copy, modify and reuse them freely, without keeping any notice.
+
+The Unreal Engine source and binaries that Setup fetches are not part of this repository. They stay under the Unreal
+Engine EULA that you accepted to get access to them.

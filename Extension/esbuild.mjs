@@ -1,5 +1,8 @@
-// Bundles the extension and its runtime dependencies into dist/extension.js, so the .vsix needs no node_modules, and
-// writes dist/ThirdPartyNotices.txt with the license of every package that ended up in the bundle.
+// Copyright (c) 2026 Naotsun
+
+// Bundles the extension and its runtime dependencies into dist/extension.js, so the .vsix needs no node_modules,
+// writes dist/ThirdPartyNotices.txt with the license of every package that ended up in the bundle, and copies the
+// repository's LICENSE next to package.json, where vsce looks for it.
 // Usage: node esbuild.mjs [--production] [--watch]
 import * as esbuild from 'esbuild';
 import * as fs from 'node:fs';
@@ -50,10 +53,19 @@ function writeThirdPartyNotices(metafile) {
   fs.writeFileSync('dist/ThirdPartyNotices.txt', `${header}${separator}${sections.join(separator)}`);
 }
 
+/**
+ * Copies the repository's LICENSE into the extension folder. vsce only packages files under this folder, and keeping
+ * a copy in git would let the two drift apart, so the copy is made on every build and ignored by git.
+ */
+function copyRepositoryLicense() {
+  fs.copyFileSync(path.join('..', 'LICENSE'), 'LICENSE');
+}
+
 if (isWatch) {
   const context = await esbuild.context(buildOptions);
   await context.watch();
 } else {
   const buildResult = await esbuild.build(buildOptions);
   writeThirdPartyNotices(buildResult.metafile);
+  copyRepositoryLicense();
 }

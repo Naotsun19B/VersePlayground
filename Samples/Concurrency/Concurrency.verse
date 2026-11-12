@@ -1,3 +1,5 @@
+# Learning sample: copy, modify and reuse it freely. No attribution needed.
+
 # Shows structured concurrency with race and sync.
 # Functions marked <suspends> can wait. Yield() waits until the next update, which lets the other running tasks
 # take their turn, so the output of the tasks below is interleaved.

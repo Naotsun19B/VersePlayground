@@ -1,8 +1,10 @@
-# Only package.json, README.md, the bundled dist/extension.js and the licenses of what it bundles go into the .vsix.
+# Only package.json, README.md, LICENSE, the bundled dist/extension.js and the licenses of what it bundles go into
+# the .vsix.
 # syntaxes/ stays out on purpose: the extension copies the Verse grammar from the user's own engine checkout at run
 # time, so the package never redistributes Epic Games files.
 **
 !package.json
 !README.md
+!LICENSE
 !dist/extension.js
 !dist/ThirdPartyNotices.txt

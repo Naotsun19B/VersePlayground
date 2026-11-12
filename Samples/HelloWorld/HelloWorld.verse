@@ -1,3 +1,5 @@
+# Learning sample: copy, modify and reuse it freely. No attribution needed.
+
 # The smallest Verse program that verse.exe can run.
 # verse.exe calls Main with the command-line arguments and the environment variables, and waits until it returns.
 # Run it with:  verse.exe HelloWorld.verse [Name]

@@ -34,6 +34,8 @@ disabled.
 
 ## License
 
+Verse Playground is released under the MIT License (see `LICENSE`).
+
 The extension contains no Epic Games code. The Verse grammar and the language server stay in your own engine
 checkout and UEFN installation and are never packaged with it. The licenses of the npm packages bundled into the
 extension are in `dist/ThirdPartyNotices.txt` inside the package.

@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Naotsun
+
 <#
 .SYNOPSIS
 Generates the minimal checkout lists for one Unreal Engine commit and stores them under Versions/.

@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Naotsun
+
 import { execFile } from 'node:child_process';
 import * as net from 'node:net';
 import * as path from 'node:path';

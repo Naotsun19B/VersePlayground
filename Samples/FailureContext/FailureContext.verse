@@ -1,3 +1,5 @@
+# Learning sample: copy, modify and reuse it freely. No attribution needed.
+
 # Shows how Verse handles expressions that can fail.
 # Instead of exceptions or sentinel values, an expression that can fail is only allowed inside a failure context,
 # such as the condition of an if. When it fails, the context fails and the else branch runs.

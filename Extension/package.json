@@ -4,7 +4,7 @@
   "description": "Run, debug and edit single Verse programs with the verse.exe that VersePlayground builds from Unreal Engine 6.",
   "version": "0.1.0",
   "publisher": "naotsun19b",
-  "license": "SEE LICENSE IN README.md",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/Naotsun19B/VersePlayground"
@@ -222,7 +222,7 @@
     "watch": "node esbuild.mjs --watch",
     "typecheck": "tsc --noEmit",
     "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"test/**/*.test.ts\"",
-    "package": "npm run typecheck && npm test && node esbuild.mjs --production && vsce package --no-dependencies --skip-license --out verse-playground.vsix"
+    "package": "npm run typecheck && npm test && node esbuild.mjs --production && vsce package --no-dependencies --out verse-playground.vsix"
   },
   "dependencies": {
     "@vscode/debugadapter": "1.68.0",

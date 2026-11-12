@@ -1,3 +1,5 @@
+# Learning sample: copy, modify and reuse it freely. No attribution needed.
+
 # Shows a module and a class hierarchy in one file.
 # verse.exe cannot load modules from other folders yet, so a module that other code uses has to be defined in the
 # same file as Main.

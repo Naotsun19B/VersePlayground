@@ -142,3 +142,12 @@ npm run package
 
 型チェックとテストを実行し、`Extension/verse-playground.vsix` を書き出します。利用者が Node.js なしで使えるように、
 新しい `.vsix` をコミットします。
+
+## ライセンス
+
+このリポジトリのスクリプト、ツール、VS Code 拡張は [MIT License](LICENSE) で公開しています。
+
+`Samples/` のプログラムは学習用です。表記を残す必要もなく、自由にコピー・改変・再利用できます。
+
+Setup が取得する Unreal Engine のソースとバイナリは、このリポジトリには含まれません。アクセス権を得るときに同意した
+Unreal Engine EULA が引き続き適用されます。

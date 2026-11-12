@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Naotsun
+
 # Rules that New-VersionManifest.ps1 combines with the UBT module graph of the target.
 # The module graph alone is not enough: UnrealBuildTool and the toolchain read files that no module declares.
 # Every entry below was found by a build that failed without it, or by recording which files a full build read.

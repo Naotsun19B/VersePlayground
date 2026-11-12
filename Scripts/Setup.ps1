@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Naotsun
+
 <#
 .SYNOPSIS
 Downloads the minimum of Unreal Engine needed to build the Verse command-line tool (verse.exe) and builds it.

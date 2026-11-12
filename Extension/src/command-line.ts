@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Naotsun
+
 /**
  * Splits a line typed by the user into program arguments.
  *

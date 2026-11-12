@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Naotsun
+
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 

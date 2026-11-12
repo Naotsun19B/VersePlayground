@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Naotsun
+
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 

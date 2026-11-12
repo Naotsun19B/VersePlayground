@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Naotsun
+
 import * as vscode from 'vscode';
 
 import type { EngineProvider } from './run-commands.ts';

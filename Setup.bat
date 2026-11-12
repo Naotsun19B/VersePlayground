@@ -1,4 +1,6 @@
 @echo off
+rem Copyright (c) 2026 Naotsun
+
 rem Builds verse.exe from the minimum of Unreal Engine. See README.md for the requirements.
 rem Arguments are passed to Scripts\Setup.ps1, for example: Setup.bat -Version ue6-main-f9f48a4bf1b9
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Scripts\Setup.ps1" %*

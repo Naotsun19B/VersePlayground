@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Naotsun
+
 /**
  * Builds the Verse project (.vproject) that the language server reads.
  *
