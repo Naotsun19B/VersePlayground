@@ -71,6 +71,7 @@ language server checks all files in a folder together, so two `Main` functions i
 | File | Shows |
 |---|---|
 | `Samples/HelloWorld/HelloWorld.verse` | The smallest program, and reading command-line arguments |
+| `Samples/Greeting/Greeting.verse` | Reading your name from standard input with `InputLine` and greeting you |
 | `Samples/FailureContext/FailureContext.verse` | Expressions that can fail, failure contexts, and `<decides>` functions |
 | `Samples/Concurrency/Concurrency.verse` | Structured concurrency with `race` and `sync` |
 | `Samples/Modules/Modules.verse` | Modules, access specifiers, abstract classes and inheritance, and effects |
@@ -92,7 +93,7 @@ and the extension finds `verse.exe` by itself.
 
 | Feature | Details |
 |---|---|
-| Run | The ▶ button in the editor title runs the open file in a terminal, so `InputLine` works. "Verse: Run Verse File with Arguments..." passes arguments |
+| Run | The ▶ button in the editor title, or Ctrl+F5, runs the open file in a terminal, so `InputLine` works. "Verse: Run Verse File with Arguments..." passes arguments. To change the key, search for "Verse: Run Verse File" in Keyboard Shortcuts (Ctrl+K Ctrl+S) |
 | Debug | The button next to it, or F5. Breakpoints, step over / into / out, the call stack and local variables |
 | Syntax highlighting | Copied from your engine checkout the first time the extension starts. Reload the window when it asks |
 | Errors | Compile errors from running a file appear in the Problems panel |

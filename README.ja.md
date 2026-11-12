@@ -69,6 +69,7 @@ VS Code の言語サーバーはフォルダ内のファイルをまとめてチ
 | ファイル | 内容 |
 |---|---|
 | `Samples/HelloWorld/HelloWorld.verse` | 最小のプログラムと、コマンドライン引数の受け取り |
+| `Samples/Greeting/Greeting.verse` | `InputLine` で標準入力から名前を読み、あいさつする |
 | `Samples/FailureContext/FailureContext.verse` | 失敗しうる式と Failure Context、`<decides>` の関数 |
 | `Samples/Concurrency/Concurrency.verse` | `race` と `sync` による構造化並行処理 |
 | `Samples/Modules/Modules.verse` | モジュール、アクセス指定子、抽象クラスと継承、エフェクト |
@@ -88,7 +89,7 @@ VS Code の言語サーバーはフォルダ内のファイルをまとめてチ
 
 | 機能 | 内容 |
 |---|---|
-| 実行 | エディタ右上の ▶ ボタンで、開いているファイルをターミナルで実行する（`InputLine` も使える）。「Verse: Run Verse File with Arguments...」で引数を渡せる |
+| 実行 | エディタ右上の ▶ ボタンか Ctrl+F5 で、開いているファイルをターミナルで実行する（`InputLine` も使える）。「Verse: Run Verse File with Arguments...」で引数を渡せる。キーは「キーボード ショートカット」（Ctrl+K Ctrl+S）で「Verse: Run Verse File」を検索して変えられる |
 | デバッグ | その隣のボタンか F5。ブレークポイント、ステップオーバー / イン / アウト、コールスタックとローカル変数 |
 | 構文ハイライト | 拡張の初回起動時に、自分のエンジンのチェックアウトからコピーする。ウィンドウの再読み込みを求められたら従う |
 | エラー表示 | 実行したときのコンパイルエラーを Problems パネルに表示する |

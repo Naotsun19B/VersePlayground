@@ -5,9 +5,10 @@ Runs, debugs and edits single Verse programs with the `verse.exe` that
 
 ## Features
 
-- **Run**: the ▶ button in the editor title runs the open `.verse` file in a terminal, so `InputLine` can read
-  what you type. Compiler errors appear in the Problems panel (from the language server when it runs, otherwise from
-  the run). "Verse: Run Verse File with Arguments..." passes arguments to `Main` in `Args`.
+- **Run**: the ▶ button in the editor title, or Ctrl+F5, runs the open `.verse` file in a terminal, so `InputLine`
+  can read what you type. Compiler errors appear in the Problems panel (from the language server when it runs,
+  otherwise from the run). "Verse: Run Verse File with Arguments..." passes arguments to `Main` in `Args`.
+  To use another key, search for "Verse: Run Verse File" in Keyboard Shortcuts (Ctrl+K Ctrl+S) and change it.
 - **Debug**: the debug button next to it, or F5, stops at breakpoints and shows the call stack and local variables.
   Step over, step into, step out and continue work. One Verse debugging session can run at a time.
 - **Syntax highlighting**: copied from your own engine checkout the first time the extension starts. Reload the

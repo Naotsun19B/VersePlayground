@@ -193,6 +193,15 @@ export class VerseDebugSession extends DebugSession {
   }
 
   protected override threadsRequest(response: DebugProtocol.ThreadsResponse): void {
+    if (this.socket === undefined) {
+      // VS Code asks for the threads as soon as configuration is done, while the launch is still connecting to
+      // verse.exe. Nothing runs yet, so an empty list is the answer; an error would show up as a notification.
+      // VS Code asks again when the program stops.
+      response.body = { threads: [] };
+      this.sendResponse(response);
+      return;
+    }
+
     void this.forward('threads', response, undefined);
   }
 

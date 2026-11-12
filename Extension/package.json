@@ -2,7 +2,7 @@
   "name": "verse-playground",
   "displayName": "Verse Playground",
   "description": "Run, debug and edit single Verse programs with the verse.exe that VersePlayground builds from Unreal Engine 6.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "naotsun19b",
   "license": "MIT",
   "repository": {
@@ -64,6 +64,13 @@
         "command": "versePlayground.restartLanguageServer",
         "title": "Restart Language Server",
         "category": "Verse"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "versePlayground.run",
+        "key": "ctrl+f5",
+        "when": "editorLangId == verse"
       }
     ],
     "menus": {
