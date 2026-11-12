@@ -2,6 +2,8 @@
 
 import * as vscode from 'vscode';
 
+import { pickArgumentLine } from './argument-picker.ts';
+import { splitArguments } from './command-line.ts';
 import type { EngineProvider } from './run-commands.ts';
 import { saveActiveVerseDocument } from './run-commands.ts';
 import { VerseDebugSession } from './verse-debug-session.ts';
@@ -9,7 +11,7 @@ import { VerseDebugSession } from './verse-debug-session.ts';
 /** Debug type declared in package.json under debuggers. */
 const DEBUG_TYPE = 'verse';
 
-/** Registers the Verse debugger: its configuration provider, its in-process adapter and the debug command. */
+/** Registers the Verse debugger: its configuration provider, its in-process adapter and the debug commands. */
 export function registerDebugging(context: vscode.ExtensionContext, getEngine: EngineProvider): void {
   context.subscriptions.push(
     vscode.debug.registerDebugConfigurationProvider(DEBUG_TYPE, new VerseDebugConfigurationProvider(getEngine)),
@@ -17,19 +19,38 @@ export function registerDebugging(context: vscode.ExtensionContext, getEngine: E
       createDebugAdapterDescriptor: () => new vscode.DebugAdapterInlineImplementation(new VerseDebugSession()),
     }),
     vscode.commands.registerCommand('versePlayground.debug', async () => {
-      const document = await saveActiveVerseDocument();
-      if (document === undefined) {
+      await debugActiveFile([]);
+    }),
+    vscode.commands.registerCommand('versePlayground.debugWithArguments', async () => {
+      const document = vscode.window.activeTextEditor?.document;
+      if (document === undefined || document.languageId !== 'verse') {
+        void vscode.window.showWarningMessage('Open a .verse file to debug it.');
         return;
       }
 
-      await vscode.debug.startDebugging(vscode.workspace.getWorkspaceFolder(document.uri), {
-        type: DEBUG_TYPE,
-        request: 'launch',
-        name: 'Debug Verse file',
-        program: document.uri.fsPath,
-      });
+      const argumentLine = await pickArgumentLine(context, document.uri.fsPath, 'Debug Verse File with Arguments');
+      if (argumentLine === undefined) {
+        return;
+      }
+      await debugActiveFile(splitArguments(argumentLine));
     }),
   );
+}
+
+/** Saves the active Verse file and starts debugging it, passing the arguments to Main in Args. */
+async function debugActiveFile(programArguments: readonly string[]): Promise<void> {
+  const document = await saveActiveVerseDocument();
+  if (document === undefined) {
+    return;
+  }
+
+  await vscode.debug.startDebugging(vscode.workspace.getWorkspaceFolder(document.uri), {
+    type: DEBUG_TYPE,
+    request: 'launch',
+    name: 'Debug Verse file',
+    program: document.uri.fsPath,
+    args: [...programArguments],
+  });
 }
 
 /** Fills in a Verse launch configuration so that F5 works without a launch.json. */

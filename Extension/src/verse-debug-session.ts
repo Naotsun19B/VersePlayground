@@ -6,6 +6,7 @@ import * as path from 'node:path';
 import { BreakpointEvent, DebugSession, Event, InitializedEvent, OutputEvent, TerminatedEvent } from '@vscode/debugadapter';
 import type { DebugProtocol } from '@vscode/debugprotocol';
 
+import { toClientVariables } from './debug-values.ts';
 import { DEBUGGER_PORT, encodeHandshake, encodeMessage, MessageReader } from './debug-wire.ts';
 import type { FirstBreakpoint } from './debug-wire.ts';
 
@@ -220,7 +221,7 @@ export class VerseDebugSession extends DebugSession {
     response: DebugProtocol.VariablesResponse,
     args: DebugProtocol.VariablesArguments,
   ): void {
-    void this.forward('variables', response, args);
+    void this.forward('variables', response, args, (body) => toClientVariables(body));
   }
 
   protected override continueRequest(

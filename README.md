@@ -93,8 +93,9 @@ and the extension finds `verse.exe` by itself.
 
 | Feature | Details |
 |---|---|
-| Run | The ▶ button in the editor title, or Ctrl+F5, runs the open file in a terminal, so `InputLine` works. "Verse: Run Verse File with Arguments..." passes arguments. To change the key, search for "Verse: Run Verse File" in Keyboard Shortcuts (Ctrl+K Ctrl+S) |
-| Debug | The button next to it, or F5. Breakpoints, step over / into / out, the call stack and local variables |
+| Run | The ▶ button in the editor title, or Ctrl+F5, runs the open file in a terminal, so `InputLine` works. To change the key, search for "Verse: Run Verse File" in Keyboard Shortcuts (Ctrl+K Ctrl+S) |
+| Arguments | Ctrl+Shift+F5 ("Verse: Run Verse File with Arguments...") or "Verse: Debug Verse File with Arguments..." asks for the arguments passed in `Args`. Each `.verse` file remembers the arguments used with it; pick one with the up and down keys, newest first |
+| Debug | The button next to it, or F5. Breakpoints, step over / into / out, the call stack, and local variables in the Variables view. A breakpoint on a line that calls a Verse function stops again when the call returns |
 | Syntax highlighting | Copied from your engine checkout the first time the extension starts. Reload the window when it asks |
 | Errors | Compile errors from running a file appear in the Problems panel |
 | Errors while typing, hover, go to definition, completion | Needs the Verse language server, see below |

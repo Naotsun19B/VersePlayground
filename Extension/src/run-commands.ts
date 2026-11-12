@@ -3,6 +3,7 @@
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 
+import { pickArgumentLine } from './argument-picker.ts';
 import { splitArguments } from './command-line.ts';
 import type { EngineLocation } from './engine-locator.ts';
 
@@ -11,9 +12,6 @@ const TASK_TYPE = 'verse';
 
 /** Problem matcher declared in package.json. It turns compiler errors into entries of the Problems panel. */
 const PROBLEM_MATCHER = '$verse';
-
-/** Workspace state key of the arguments typed last, offered again the next time. */
-const LAST_ARGUMENTS_KEY = 'versePlayground.lastArguments';
 
 /** Returns the engine to run with, or undefined after telling the user that none was found. */
 export type EngineProvider = () => EngineLocation | undefined;
@@ -32,17 +30,16 @@ export function registerRunCommands(
       await runActiveFile(getEngine, isCoveredByLanguageServer, []);
     }),
     vscode.commands.registerCommand('versePlayground.runWithArguments', async () => {
-      const lastArguments = context.workspaceState.get<string>(LAST_ARGUMENTS_KEY, '');
-      const argumentLine = await vscode.window.showInputBox({
-        title: 'Run Verse File with Arguments',
-        prompt: 'Arguments passed to Main in Args, after the script path. Use double quotes for spaces.',
-        value: lastArguments,
-      });
-      if (argumentLine === undefined) {
+      const document = vscode.window.activeTextEditor?.document;
+      if (document === undefined || document.languageId !== 'verse') {
+        void vscode.window.showWarningMessage('Open a .verse file to run it.');
         return;
       }
 
-      await context.workspaceState.update(LAST_ARGUMENTS_KEY, argumentLine);
+      const argumentLine = await pickArgumentLine(context, document.uri.fsPath, 'Run Verse File with Arguments');
+      if (argumentLine === undefined) {
+        return;
+      }
       await runActiveFile(getEngine, isCoveredByLanguageServer, splitArguments(argumentLine));
     }),
   );
