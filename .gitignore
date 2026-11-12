@@ -1,0 +1,79 @@
+# Engine checkout created by Setup.bat
+/UnrealEngine/
+
+# Location of verse.exe on this machine, written by Setup.bat
+/VersePlayground.local.json
+
+# --- appended by git-workflow:init (generic preset) ---
+# Visual Studio user specific files
+.vs/
+
+# JetBrains IDE user specific files
+.idea/
+*.user
+
+# Claude Code
+# Track project-shared skills and agents, and the hand-written code-style
+# overrides. All other .claude/ contents (settings, caches, scripts, hooks)
+# are treated as environment-specific and intentionally not tracked.
+#
+# The overrides are the source a project's own style rules are written in,
+# so losing them loses the rules. Everything code-style:init renders from
+# them stays untracked and is regenerated per machine.
+.claude/*
+!.claude/skills/
+!.claude/agents/
+!.claude/code-style/
+.claude/code-style/*
+!.claude/code-style/overrides/
+.mcp.json
+
+# Visual Studio database file
+*.VC.db
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+*.ipa
+
+# IDE / project files
+*.xcodeproj
+*.xcworkspace
+*.sln
+*.slnx
+*.suo
+*.opensdf
+*.sdf
+*.VC.opendb
+*.vsconfig
+
+# Python bytecode
+*.pyc
+*.pyo
+__pycache__/
+.pytest_cache/

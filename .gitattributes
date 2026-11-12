@@ -1,0 +1,6 @@
+# cmd.exe misreads batch files with LF line endings in some cases.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Lists consumed by git and GitDependencies.
+Versions/**/*.txt text eol=lf

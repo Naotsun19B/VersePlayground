@@ -1,0 +1,10 @@
+{
+    "commit":  "f9f48a4bf1b9c76013ccb9c42cd08b1879339b9d",
+    "branch":  "ue6-main",
+    "commitDate":  "2026-11-04T21:43:13-05:00",
+    "generatedDate":  "2026-11-12",
+    "verified":  true,
+    "verifiedDate":  "2026-11-12",
+    "estimatedGitDependenciesDownloadMB":  989,
+    "notes":  "Setup into an empty folder builds verse.exe with EpicClang 20.1.8 and runs every sample."
+}
