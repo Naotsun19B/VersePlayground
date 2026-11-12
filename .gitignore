@@ -21,19 +21,9 @@
 *.user
 
 # Claude Code
-# Track project-shared skills and agents, and the hand-written code-style
-# overrides. All other .claude/ contents (settings, caches, scripts, hooks)
-# are treated as environment-specific and intentionally not tracked.
-#
-# The overrides are the source a project's own style rules are written in,
-# so losing them loses the rules. Everything code-style:init renders from
-# them stays untracked and is regenerated per machine.
-.claude/*
-!.claude/skills/
-!.claude/agents/
-!.claude/code-style/
-.claude/code-style/*
-!.claude/code-style/overrides/
+# Everything under .claude/, the code-style overrides included, is local to
+# each machine and intentionally not tracked.
+.claude/
 .mcp.json
 
 # Visual Studio database file
