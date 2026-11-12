@@ -121,7 +121,16 @@ function Get-VisualStudioInstances {
         return @()
     }
 
-    $instancesJson = (& $VsWherePath -all -products * -format json -utf8) | Out-String
+    # vswhere -utf8 writes UTF-8, but Windows PowerShell decodes native output with the console code page. On a
+    # Japanese system that garbles the localized descriptions, can swallow their closing quotes and breaks the JSON.
+    $previousEncoding = [Console]::OutputEncoding
+    try {
+        [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
+        $instancesJson = (& $VsWherePath -all -products * -format json -utf8) | Out-String
+    }
+    finally {
+        [Console]::OutputEncoding = $previousEncoding
+    }
     $instances = foreach ($instance in ($instancesJson | ConvertFrom-Json)) {
         [pscustomobject] @{
             DisplayName = $instance.displayName
@@ -314,13 +323,14 @@ function Confirm-BuildToolchain {
             "https://visualstudio.microsoft.com/downloads/ and $manualSteps")
     }
 
-    $logPath = Join-Path ([System.IO.Path]::GetTempPath()) 'VersePlayground-VisualStudioInstaller.log'
-    Write-Host "Installing into $($plan.Description). The installer's log goes to $logPath"
-    $exitCode = Invoke-VisualStudioInstaller -Arguments $plan.Arguments -LogPath $logPath -ManualSteps $manualSteps
+    Write-Host "Installing into $($plan.Description)."
+    $startTime = Get-Date
+    $exitCode = Invoke-VisualStudioInstaller -Arguments $plan.Arguments -ManualSteps $manualSteps
 
     # The installer may restart itself to update first, so its exit code alone does not prove the result.
     $stillMissing = @(Get-MissingBuildComponents -SdkRequirement $sdkRequirement -CppRequirement $cppRequirement)
     if ($stillMissing.Count -gt 0) {
+        $logPath = Get-VisualStudioInstallerLog -Since $startTime
         throw ("The Visual Studio Installer finished (exit code $exitCode), but " +
             "$(($stillMissing | ForEach-Object { $_.Name }) -join ' and ') is still missing. Close Visual Studio " +
             "and try again, or see $logPath. $manualSteps")
@@ -352,27 +362,47 @@ function Get-BuildToolsInstallPlan {
 
     $major = ([version] $CppRequirement.visualStudioVersion).Major
     $installPath = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\$major\BuildTools"
+    # Visual Studio 2026 (18) publishes its release channel as "stable"; aka.ms/vs/18/release/channel does not
+    # exist and redirects to bing.com, which the installer rejects as an invalid channel manifest. The channel ID
+    # inside the manifest is still VisualStudio.18.Release.
+    $channelName = if ($major -ge 18) { 'stable' } else { 'release' }
     return [pscustomobject] @{
         Description = "a new Visual Studio Build Tools $major in $installPath"
         Arguments = @(
             'install',
             '--channelId', "VisualStudio.$major.Release",
-            '--channelUri', "https://aka.ms/vs/$major/release/channel",
+            '--channelUri', "https://aka.ms/vs/$major/$channelName/channel",
             '--productId', 'Microsoft.VisualStudio.Product.BuildTools',
             '--installPath', $installPath
         ) + $addArguments + @('--passive', '--norestart')
     }
 }
 
-# Runs the Visual Studio Installer as administrator through a hidden PowerShell, so that its log goes to a file
-# instead of filling this console. Start-Process -Wait also waits for the copy the installer starts when it updates
-# itself. Returns the exit code.
+# Returns the newest log the Visual Studio Installer wrote to %TEMP% since the given time, or the log folder when
+# there is none. The installer writes nothing to the console, so its own dd_installer_*.log is the only record.
+function Get-VisualStudioInstallerLog {
+    param([datetime] $Since)
+
+    $tempDir = [System.IO.Path]::GetTempPath()
+    $log = Get-ChildItem -LiteralPath $tempDir -Filter 'dd_installer_*.log' -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.LastWriteTime -ge $Since.AddSeconds(-5) } |
+        Sort-Object -Property LastWriteTime -Descending |
+        Select-Object -First 1
+    if ($null -ne $log) {
+        return $log.FullName
+    }
+    return Join-Path $tempDir 'dd_installer_*.log'
+}
+
+# Runs the Visual Studio Installer as administrator through a hidden PowerShell. Start-Process -Wait also waits for
+# the copy the installer starts when it updates itself. Returns the exit code.
 function Invoke-VisualStudioInstaller {
-    param([string[]] $Arguments, [string] $LogPath, [string] $ManualSteps)
+    param([string[]] $Arguments, [string] $ManualSteps)
 
     $quotedArguments = foreach ($argument in $Arguments) { "'" + $argument.Replace("'", "''") + "'" }
-    $command = ("& '{0}' {1} *> '{2}'; exit `$LASTEXITCODE" -f
-        $VsInstallerPath.Replace("'", "''"), ($quotedArguments -join ' '), $LogPath.Replace("'", "''"))
+    # setup.exe is a GUI program, so PowerShell waits for it and sets $LASTEXITCODE only when its output is piped.
+    $command = ("& '{0}' {1} | Out-Null; exit `$LASTEXITCODE" -f
+        $VsInstallerPath.Replace("'", "''"), ($quotedArguments -join ' '))
     $encodedCommand = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($command))
     try {
         $installer = Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Hidden -Wait -PassThru `
