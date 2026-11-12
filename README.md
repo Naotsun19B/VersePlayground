@@ -92,7 +92,7 @@ Pass a folder name or the start of a commit hash to `-Version` to use that versi
 2. Generate the lists.
 
    ```powershell
-   .\Tools\New-VersionManifest.ps1 -EngineDir 'F:\Epic Games\UE_Github'
+   .\Tools\New-VersionManifest.ps1 -EngineDir 'D:\UnrealEngine'
    ```
 
    This exports the module dependencies of the `VerseCmd` target with UnrealBuildTool, adds the rules in

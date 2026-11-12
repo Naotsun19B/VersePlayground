@@ -21,7 +21,7 @@ Root of the full Unreal Engine checkout (the folder that contains Engine/ and Se
 Free text stored in version.json, such as what was checked.
 
 .EXAMPLE
-.\Tools\New-VersionManifest.ps1 -EngineDir 'F:\Epic Games\UE_Github'
+.\Tools\New-VersionManifest.ps1 -EngineDir 'D:\UnrealEngine'
 #>
 [CmdletBinding()]
 param(

@@ -89,7 +89,7 @@ Setup は確認済み（`"verified": true`）のバージョンを既定にし�
 2. 一覧を生成する。
 
    ```powershell
-   .\Tools\New-VersionManifest.ps1 -EngineDir 'F:\Epic Games\UE_Github'
+   .\Tools\New-VersionManifest.ps1 -EngineDir 'D:\UnrealEngine'
    ```
 
    UnrealBuildTool で `VerseCmd` ターゲットのモジュール依存を書き出し、`Tools/ManifestRules.psd1` のルールを足して
