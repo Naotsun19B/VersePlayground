@@ -10,7 +10,7 @@ Verse のコマンドラインツール `verse.exe` をビルドします。あ�
 このリポジトリには Epic Games のコードもバイナリも含まれていません。
 エンジンのソースは、Setup が利用者自身のアクセス権で Epic Games の GitHub リポジトリから取得します。
 
-[デモ動画: VS Code で Verse のサンプルを実行・デバッグする](videos/RunAndDebug.mp4)
+<video src="https://github.com/user-attachments/assets/54d3ff1d-6552-407d-937c-1c6d5f3a5fad" autoplay loop muted playsinline controls width="100%"></video>
 
 ## 必要なもの
 
