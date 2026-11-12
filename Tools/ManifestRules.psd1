@@ -59,6 +59,10 @@
         # Not needed by the build. The VS Code extension reads the Verse syntax grammar from here; in cone mode
         # this also checks out verse-language-configuration.json, which sits in the parent directory.
         'Engine/Source/Programs/UnrealVS/UnrealVS/Grammars'
+
+        # The verse-simulation-sleep patch makes VerseCmd depend on this module, and the module graph is exported
+        # from the unpatched engine.
+        'Engine/Plugins/Verse/VerseSimulation'
     )
 
     # Paths that keep the binary dependencies of every host platform. The UnrealBuildTool build copies the

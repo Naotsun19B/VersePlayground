@@ -82,13 +82,20 @@ language server checks all files in a folder together, so two `Main` functions i
 | `Samples/Concurrency/Concurrency.verse` | Structured concurrency with `race` and `sync` |
 | `Samples/Modules/Modules.verse` | Modules, access specifiers, abstract classes and inheritance, and effects |
 | `Samples/Random/Random.verse` | A random number generator built from a struct, a class, a `<constructor>` function and a failable method. Pass a seed as an argument to get other numbers |
+| `Samples/Timers/Timers.verse` | Waiting with `Sleep`, a timeout made with `race`, tasks that wait side by side, and a task started with `spawn` |
 
 ### What is available
 
 - You can use the `/Verse.org/Verse` standard library and the input/output functions that `verse.exe` provides.
   - `Print`, `InputLine` (standard input), `LoadTextFile` / `SaveTextFile`, `Yield`, `Exit`
-- Fortnite and UEFN APIs (`/Fortnite.com/...`, `Sleep`, and so on) are not available. Code from UEFN tutorials may
-  not run as is.
+- `Sleep` and `GetSimulationElapsedTime` of `/Verse.org/Simulation` work with `using { /Verse.org/Simulation }`
+  (the `verse-simulation-sleep` engine patch). `GetSimulationElapsedTime` counts the seconds since the script
+  started, and it and `GetSecondsSinceEpoch` stay the same until the script suspends, as they do within one frame
+  in UEFN. The clock of `Sleep` and `GetSimulationElapsedTime` advances by at most 0.25 seconds while the script
+  runs without suspending, so stopping at a breakpoint does not make the other tasks wake up at once. A computation
+  that takes longer than that counts as 0.25 seconds as well.
+- Fortnite and UEFN APIs (`/Fortnite.com/...`, `/UnrealEngine.com/...`) are not available, and `@editable` stops the
+  script with a runtime error. Code from UEFN tutorials may not run as is.
 - `verse.exe` has a `--mount` option for loading modules from other folders, but it is not implemented yet.
   Define modules in the same file as `Main`.
 
@@ -146,6 +153,8 @@ checkout to another version, so switching versions and choosing other patches bo
 | Patch | Fixes |
 |---|---|
 | `debugger-constructor-self` | Debugging ends `verse.exe` when it stops inside a `<constructor>` function, or in a function that one calls. The engine calls the wrapper it generates for a constructor function without a Self, and the debugger stops the program when it lists a call stack with such a frame |
+| `verse-simulation-sleep` | `verse.exe` has no `Sleep`, and `GetSecondsSinceEpoch` returns the start time for the whole run. It links Epic's VerseSimulation module, which declares `Sleep` and `GetSimulationElapsedTime`, and implements them for a program without a game world: the clock advances each time the script resumes, and `Sleep` waits in real time, without counting the time stopped at a breakpoint |
+
 #### Rules for publishing a patch
 
 The context lines and the removed lines of a patch are engine source. Section 5(a)(ii) of the Unreal Engine EULA

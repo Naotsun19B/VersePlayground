@@ -17,6 +17,7 @@ Engine/Plugins/Experimental/PlatformCrypto
 Engine/Plugins/Solaris
 Engine/Plugins/Verse/EpicGamesEngineRestricted
 Engine/Plugins/Verse/Verse
+Engine/Plugins/Verse/VerseSimulation
 Engine/Plugins/Verse/VerseSimulationMetadata
 Engine/Plugins/Verse/VerseSpatialMath
 Engine/Plugins/VerseInterface

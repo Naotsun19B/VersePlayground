@@ -1,0 +1,221 @@
+Title: Sleep and the simulation clock of /Verse.org/Simulation work in verse.exe
+
+verse.exe has no UWorld, so it has no Sleep, and GetSecondsSinceEpoch returns the start time for the whole run,
+because the engine updates it at the start of each frame and verse.exe never starts one. This patch links Epic's
+VerseSimulation module, which declares Sleep and GetSimulationElapsedTime, and replaces their UWorld-based bodies
+through the hooks that VerseSimulation provides for programs without a world. A frame is one job of the event loop,
+and when the loop has no job left it waits for the task in Sleep that is due first. The simulation clock advances
+by that wait and by at most 0.25 seconds for each job, so time spent stopped at a breakpoint barely counts.
+
+diff --git a/Engine/Source/Programs/VerseCmd/Private/EventLoop.cpp b/Engine/Source/Programs/VerseCmd/Private/EventLoop.cpp
+index 7b3b0a4e74a2..362dd5d98ddc 100644
+--- a/Engine/Source/Programs/VerseCmd/Private/EventLoop.cpp
++++ b/Engine/Source/Programs/VerseCmd/Private/EventLoop.cpp
+@@ -7,2 +7,3 @@
+ #include "Misc/Optional.h"
++#include "PlaygroundSimulation.h"
+ #include "Templates/UnrealTemplate.h"
+@@ -51,3 +52,4 @@
+     TFunction<void(const verse::FExecutionContext&)> JobThunk;
+-    while (EnqueuedAsyncJobs.Dequeue(JobThunk))
++    // VersePlayground: with no job left, wait for a task in Sleep.
++    while (EnqueuedAsyncJobs.Dequeue(JobThunk) || (!PendingExit.IsSet() && WaitForSleepingTask(JobThunk)))
+     {
+@@ -57,2 +59,3 @@
+ 
++            BeginFrame();
+             JobThunk(ExecContext);
+diff --git a/Engine/Source/Programs/VerseCmd/Private/PlaygroundSimulation.cpp b/Engine/Source/Programs/VerseCmd/Private/PlaygroundSimulation.cpp
+new file mode 100644
+index 000000000000..65b8275d801e
+--- /dev/null
++++ b/Engine/Source/Programs/VerseCmd/Private/PlaygroundSimulation.cpp
+@@ -0,0 +1,142 @@
++// Copyright (c) 2026 Naotsun
++
++// VersePlayground: the clock and Sleep of /Verse.org/Simulation for verse.exe.
++//
++// VerseSimulation implements Sleep and GetSimulationElapsedTime with the timers and the game state of a UWorld, and
++// lets a program without one replace them through UE_VERSE_SIMULATION_OVERRIDES. Here a frame is one job of the
++// event loop: the clock advances at the start of each job. When the event loop has no other job, it waits for the
++// sleeping task that is due first and resumes it in a job of its own, so that the loop can stop between two tasks
++// when one of them calls Exit.
++//
++// The clock is a simulation clock rather than the real time. It advances by the time the event loop waited for a
++// sleeping task, and by at most MaxJobSeconds for the time a job ran. A job stopped at a breakpoint therefore moves
++// it by little, so the other tasks do not wake up all at once when the debugger continues.
++
++#include "PlaygroundSimulation.h"
++#include "Containers/Map.h"
++#include "EventLoop.h"
++#include "HAL/PlatformProcess.h"
++#include "HAL/PlatformTime.h"
++#include "IVerseSimulationModule.h"
++#include "Misc/CoreDelegates.h"
++#include "VerseVM/VVMCoroutine.h"
++#include "VerseVM/VVMExecutionContext.h"
++
++namespace {
++struct FSleepingTask
++{
++    TStrongVerseCall<void> Call;
++    double WakeSeconds;
++};
++
++// The tasks waiting in Sleep, keyed by the order they started sleeping in, so that tasks due at the same time resume
++// in that order. Sleep changes it inside a transaction, which AutoRTFM undoes if the transaction aborts.
++TMap<uint64, FSleepingTask> GSleepingTasks;
++uint64 GNextSleepId = 0;
++
++// A job cannot tell a breakpoint from a long computation, so both count as this much at most, like the limit that a
++// game puts on the time of one frame.
++constexpr double MaxJobSeconds = 0.25;
++
++bool bStarted = false;
++// The simulation clock at the start of the current frame. GetSimulationElapsedTime returns it.
++double GFrameSeconds = 0.0;
++// The real time at the start of the current frame.
++double GFrameRealSeconds = 0.0;
++// The real time that the event loop has waited for sleeping tasks since the start of the current frame.
++double GWaitedRealSeconds = 0.0;
++
++double GetSimulationElapsedTime() { return GFrameSeconds; }
++
++// The simulation clock now: the current frame, plus the time its job ran up to the limit, plus the time waited since.
++AUTORTFM_DISABLE double GetSimulationNow(double RealSeconds)
++{
++    const double JobSeconds = RealSeconds - GFrameRealSeconds - GWaitedRealSeconds;
++    return GFrameSeconds + FMath::Clamp(JobSeconds, 0.0, MaxJobSeconds) + GWaitedRealSeconds;
++}
++
++FVerseResult Sleep(TVerseCall<void> Call, double Seconds)
++{
++    // VerseSimulation has already handled Seconds < 0 and Seconds = Inf. Seconds = 0 waits for the next frame.
++    verse::FExecutionContext ExecContext = verse::FExecutionContext::GetActiveContext();
++    const uint64 SleepId = GNextSleepId++;
++    GSleepingTasks.Emplace(SleepId,
++                           FSleepingTask{.Call = TStrongVerseCall<void>(Call), .WakeSeconds = GFrameSeconds + Seconds});
++    // Runs when the task resumes, and also when it is canceled, for example by losing a race.
++    Call.Defer(ExecContext, [SleepId] { GSleepingTasks.Remove(SleepId); });
++    return Call.Suspend(ExecContext);
++}
++
++// The sleeping tasks hold references into the VM, so they are released before the engine shuts down.
++AUTORTFM_DISABLE void ReleaseSleepingTasks() { GSleepingTasks.Empty(); }
++
++AUTORTFM_DISABLE void ResumeSleepingTask(const verse::FExecutionContext& ExecContext, uint64 SleepId)
++{
++    // The task may have been canceled while the event loop ran the jobs before this one.
++    FSleepingTask* SleepingTask = GSleepingTasks.Find(SleepId);
++    if (SleepingTask == nullptr)
++    {
++        return;
++    }
++
++    TStrongVerseCall<void> Call = SleepingTask->Call;
++    GSleepingTasks.Remove(SleepId);
++    if (Call.Return(ExecContext).IsError())
++    {
++        VerseCmd::ExitEventLoop(VerseCmd::FEventLoopExit::Error());
++    }
++}
++}
++
++AUTORTFM_DISABLE void VerseCmd::BeginFrame()
++{
++    const double RealSeconds = FPlatformTime::Seconds();
++    if (!bStarted)
++    {
++        // Sleep cannot run before the first frame: the script only suspends inside the jobs of the event loop.
++        verse::Simulation::GGetSimulationElapsedTimeOverride = &GetSimulationElapsedTime;
++        verse::Simulation::GSleepOverride = &Sleep;
++        FCoreDelegates::OnPreExit.AddStatic(&ReleaseSleepingTasks);
++        bStarted = true;
++    }
++    else
++    {
++        GFrameSeconds = GetSimulationNow(RealSeconds);
++    }
++    GFrameRealSeconds = RealSeconds;
++    GWaitedRealSeconds = 0.0;
++
++    // GetSecondsSinceEpoch reads the time that Verse.cpp updates at the start of each engine frame.
++    FCoreDelegates::OnBeginFrame.Broadcast();
++}
++
++AUTORTFM_DISABLE bool VerseCmd::WaitForSleepingTask(TFunction<void(const verse::FExecutionContext&)>& OutJob)
++{
++    const TPair<uint64, FSleepingTask>* FirstEntry = nullptr;
++    for (const TPair<uint64, FSleepingTask>& Entry : GSleepingTasks)
++    {
++        if (FirstEntry == nullptr || Entry.Value.WakeSeconds < FirstEntry->Value.WakeSeconds ||
++            (Entry.Value.WakeSeconds == FirstEntry->Value.WakeSeconds && Entry.Key < FirstEntry->Key))
++        {
++            FirstEntry = &Entry;
++        }
++    }
++    if (FirstEntry == nullptr)
++    {
++        return false;
++    }
++
++    const double WaitStartRealSeconds = FPlatformTime::Seconds();
++    const double WaitSeconds = FirstEntry->Value.WakeSeconds - GetSimulationNow(WaitStartRealSeconds);
++    if (WaitSeconds > 0.0)
++    {
++        FPlatformProcess::Sleep(static_cast<float>(WaitSeconds));
++        // The real wait can be longer than asked for, and the clock counts all of it.
++        GWaitedRealSeconds += FPlatformTime::Seconds() - WaitStartRealSeconds;
++    }
++
++    OutJob = [SleepId = FirstEntry->Key](const verse::FExecutionContext& ExecContext) {
++        ResumeSleepingTask(ExecContext, SleepId);
++    };
++    return true;
++}
+diff --git a/Engine/Source/Programs/VerseCmd/Private/PlaygroundSimulation.h b/Engine/Source/Programs/VerseCmd/Private/PlaygroundSimulation.h
+new file mode 100644
+index 000000000000..67323a70c4aa
+--- /dev/null
++++ b/Engine/Source/Programs/VerseCmd/Private/PlaygroundSimulation.h
+@@ -0,0 +1,22 @@
++// Copyright (c) 2026 Naotsun
++
++// VersePlayground: the clock and Sleep of /Verse.org/Simulation for verse.exe, which has no UWorld to provide them.
++
++#pragma once
++
++#include "AutoRTFM.h"
++#include "Templates/Function.h"
++
++namespace verse {
++struct FExecutionContext;
++}
++
++namespace VerseCmd {
++// Starts a frame before each job of the event loop. Updates the time that GetSecondsSinceEpoch and
++// GetSimulationElapsedTime return, which stays the same within a frame.
++AUTORTFM_DISABLE void BeginFrame();
++
++// Returns false when no task is sleeping. Otherwise waits until the sleeping task that is due first is due, and sets
++// OutJob to a job that resumes it.
++AUTORTFM_DISABLE bool WaitForSleepingTask(TFunction<void(const verse::FExecutionContext&)>& OutJob);
++}
+diff --git a/Engine/Source/Programs/VerseCmd/VerseCmd.Build.cs b/Engine/Source/Programs/VerseCmd/VerseCmd.Build.cs
+index 4f3dd06e5b62..1532e02218ff 100644
+--- a/Engine/Source/Programs/VerseCmd/VerseCmd.Build.cs
++++ b/Engine/Source/Programs/VerseCmd/VerseCmd.Build.cs
+@@ -33,2 +33,3 @@
+ 			"VerseSpatialMath",
++			"VerseSimulation", // VersePlayground: Sleep and GetSimulationElapsedTime
+ 		});
+diff --git a/Engine/Source/Programs/VerseCmd/VerseCmd.Target.cs b/Engine/Source/Programs/VerseCmd/VerseCmd.Target.cs
+index b408d3f1c464..335c1537771a 100644
+--- a/Engine/Source/Programs/VerseCmd/VerseCmd.Target.cs
++++ b/Engine/Source/Programs/VerseCmd/VerseCmd.Target.cs
+@@ -48,2 +48,5 @@
+ 		bUseVerseBPVM = false;
++
++		// VersePlayground: lets PlaygroundSimulation.cpp provide Sleep and the simulation clock without a UWorld.
++		GlobalDefinitions.Add("UE_VERSE_SIMULATION_OVERRIDES=1");
+ 	}

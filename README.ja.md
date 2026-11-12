@@ -78,12 +78,20 @@ VS Code の言語サーバーはフォルダ内のファイルをまとめてチ
 | `Samples/Concurrency/Concurrency.verse` | `race` と `sync` による構造化並行処理 |
 | `Samples/Modules/Modules.verse` | モジュール、アクセス指定子、抽象クラスと継承、エフェクト |
 | `Samples/Random/Random.verse` | struct、class、`<constructor>` 関数、失敗しうるメソッドで作る乱数生成器。引数でシードを渡すと別の数列になる |
+| `Samples/Timers/Timers.verse` | `Sleep` で待つこと、`race` で作るタイムアウト、並んで待つタスク、`spawn` で始めるタスク |
 
 ### 使える機能と制限
 
 - 使えるのは `/Verse.org/Verse` の標準ライブラリと、`verse.exe` が用意する入出力の関数です。
   - `Print`、`InputLine`（標準入力）、`LoadTextFile` / `SaveTextFile`、`Yield`、`Exit`
-- Fortnite や UEFN の API（`/Fortnite.com/...` や `Sleep` など）はありません。UEFN のチュートリアルのコードは、そのままでは動かないことがあります。
+- `/Verse.org/Simulation` の `Sleep` と `GetSimulationElapsedTime` は、`using { /Verse.org/Simulation }` で使えます
+  （エンジンパッチ `verse-simulation-sleep`）。`GetSimulationElapsedTime` はスクリプトを始めてからの秒数です。これと
+  `GetSecondsSinceEpoch` は、UEFN で 1 フレームの間は変わらないのと同じように、スクリプトが中断するまで同じ値のままです。
+  `Sleep` と `GetSimulationElapsedTime` の時計は、スクリプトが中断せずに動いている間は 0.25 秒までしか進みません。そのため、
+  ブレークポイントで止めても、ほかのタスクが再開と同時にまとめて動き出すことはありません。0.25 秒より長くかかる計算も
+  0.25 秒として数えます。
+- Fortnite や UEFN の API（`/Fortnite.com/...`、`/UnrealEngine.com/...`）はありません。`@editable` を使うと実行時エラーで
+  止まります。UEFN のチュートリアルのコードは、そのままでは動かないことがあります。
 - `verse.exe` には別のフォルダのモジュールを読み込むオプション `--mount` がありますが、まだ実装されていません。モジュールは `Main` と同じファイルの中に定義します。
 
 ## VS Code
@@ -140,6 +148,8 @@ Setup はパッチを当てたファイルを `VersePlayground.local.json` に�
 | パッチ | 直すこと |
 |---|---|
 | `debugger-constructor-self` | `<constructor>` 関数の中や、そこから呼ばれる関数の中で止まると、デバッグ中に `verse.exe` が終了する。エンジンはコンストラクタ関数のために生成するラッパを Self なしで呼び、デバッガはそのフレームを含むコールスタックを作るときにプログラムを止めてしまう |
+| `verse-simulation-sleep` | `verse.exe` には `Sleep` が無く、`GetSecondsSinceEpoch` は実行中ずっと起動時の時刻を返す。Epic の VerseSimulation モジュール（`Sleep` と `GetSimulationElapsedTime` を宣言している）を組み込み、ゲームのワールドが無いプログラム用に実装する。時刻はスクリプトが再開するたびに進み、`Sleep` は実時間で待つ。ブレークポイントで止めていた時間は数えない |
+
 #### パッチを公開するときの決まり
 
 パッチの文脈行と削除行は、エンジンのソースそのものです。Unreal Engine EULA の 5(a)(ii) は、30 行までのエンジンのコードの

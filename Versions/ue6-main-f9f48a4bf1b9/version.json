@@ -6,7 +6,8 @@
     "verified":  true,
     "verifiedDate":  "2026-11-12",
     "patches":  [
-                    "debugger-constructor-self"
+                    "debugger-constructor-self",
+                    "verse-simulation-sleep"
                 ],
     "estimatedGitDependenciesDownloadMB":  989,
     "windowsSdk":  {
