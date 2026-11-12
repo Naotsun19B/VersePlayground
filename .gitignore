@@ -4,6 +4,12 @@
 # Location of verse.exe on this machine, written by Setup.bat
 /VersePlayground.local.json
 
+# VS Code extension build output. verse-playground.vsix itself is committed so that users need no Node.js.
+/Extension/node_modules/
+/Extension/dist/
+# Copied from the user's engine checkout at run time; never committed or packaged.
+/Extension/syntaxes/
+
 # --- appended by git-workflow:init (generic preset) ---
 # Visual Studio user specific files
 .vs/

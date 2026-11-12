@@ -35,6 +35,7 @@
 !/Engine/Source/Programs/UnrealBuildTool/
 !/Engine/Source/Programs/UnrealBuildTool.GenerateDocumentation/
 !/Engine/Source/Programs/UnrealBuildTool.Tests/
+!/Engine/Source/Programs/UnrealVS/UnrealVS/Grammars/
 !/Engine/Source/Programs/VerseCmd/
 !/Engine/Source/Runtime/Analytics/Analytics/
 !/Engine/Source/Runtime/Analytics/AnalyticsET/

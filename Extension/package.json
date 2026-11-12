@@ -1,0 +1,238 @@
+{
+  "name": "verse-playground",
+  "displayName": "Verse Playground",
+  "description": "Run, debug and edit single Verse programs with the verse.exe that VersePlayground builds from Unreal Engine 6.",
+  "version": "0.1.0",
+  "publisher": "naotsun19b",
+  "license": "SEE LICENSE IN README.md",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Naotsun19B/VersePlayground"
+  },
+  "engines": {
+    "vscode": "^1.91.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Debuggers"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "workspaceContains:**/*.verse",
+    "onDebugResolve:verse"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "verse",
+        "aliases": [
+          "Verse",
+          "verse"
+        ],
+        "extensions": [
+          ".verse"
+        ],
+        "configuration": "./syntaxes/verse-language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "verse",
+        "scopeName": "source.verse",
+        "path": "./syntaxes/verse.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "versePlayground.run",
+        "title": "Run Verse File",
+        "category": "Verse",
+        "icon": "$(play)"
+      },
+      {
+        "command": "versePlayground.runWithArguments",
+        "title": "Run Verse File with Arguments...",
+        "category": "Verse"
+      },
+      {
+        "command": "versePlayground.debug",
+        "title": "Debug Verse File",
+        "category": "Verse",
+        "icon": "$(debug-alt)"
+      },
+      {
+        "command": "versePlayground.restartLanguageServer",
+        "title": "Restart Language Server",
+        "category": "Verse"
+      }
+    ],
+    "menus": {
+      "editor/title/run": [
+        {
+          "command": "versePlayground.run",
+          "when": "editorLangId == verse",
+          "group": "navigation@1"
+        },
+        {
+          "command": "versePlayground.debug",
+          "when": "editorLangId == verse",
+          "group": "navigation@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "versePlayground.run",
+          "when": "editorLangId == verse"
+        },
+        {
+          "command": "versePlayground.runWithArguments",
+          "when": "editorLangId == verse"
+        },
+        {
+          "command": "versePlayground.debug",
+          "when": "editorLangId == verse"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Verse Playground",
+      "properties": {
+        "versePlayground.engineDir": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Engine folder that `Setup.bat` created. When empty, the extension reads `VersePlayground.local.json` from the workspace folder or one of its parents."
+        },
+        "versePlayground.languageServer.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Start the Verse language server for diagnostics, hover, go to definition and completion."
+        },
+        "versePlayground.languageServer.path": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to `verse-lsp.exe`. When empty, the extension uses the one bundled with the UEFN Verse extension (`epicgames.verse`), whether that extension is enabled or not."
+        }
+      }
+    },
+    "taskDefinitions": [
+      {
+        "type": "verse",
+        "required": [
+          "file"
+        ],
+        "properties": {
+          "file": {
+            "type": "string",
+            "description": "The Verse file to run."
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Arguments passed to the program in Args."
+          }
+        }
+      }
+    ],
+    "problemMatchers": [
+      {
+        "name": "verse",
+        "owner": "verse",
+        "source": "verse",
+        "fileLocation": [
+          "absolute"
+        ],
+        "pattern": {
+          "regexp": "^(.*)\\((\\d+),(\\d+),(\\d+),(\\d+)\\): Verse compiler (error|warning|info) (V\\d+): (.*)$",
+          "file": 1,
+          "line": 2,
+          "column": 3,
+          "endLine": 4,
+          "endColumn": 5,
+          "severity": 6,
+          "code": 7,
+          "message": 8
+        }
+      }
+    ],
+    "breakpoints": [
+      {
+        "language": "verse"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "verse",
+        "label": "Verse",
+        "languages": [
+          "verse"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "required": [
+              "program"
+            ],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "The Verse file to debug.",
+                "default": "${file}"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Arguments passed to the program in Args.",
+                "default": []
+              },
+              "cwd": {
+                "type": "string",
+                "description": "Working directory of verse.exe. Defaults to the folder of the program."
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "verse",
+            "request": "launch",
+            "name": "Debug Verse file",
+            "program": "${file}"
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "Verse: Debug file",
+            "description": "Debug the Verse file in the active editor.",
+            "body": {
+              "type": "verse",
+              "request": "launch",
+              "name": "Debug Verse file",
+              "program": "^\"\\${file}\""
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"test/**/*.test.ts\"",
+    "package": "npm run typecheck && npm test && node esbuild.mjs --production && vsce package --no-dependencies --skip-license --out verse-playground.vsix"
+  },
+  "dependencies": {
+    "@vscode/debugadapter": "1.68.0",
+    "vscode-languageclient": "10.1.2"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.1",
+    "@types/vscode": "1.91.0",
+    "@vscode/vsce": "4.1.0",
+    "esbuild": "0.28.2",
+    "typescript": "5.9.3"
+  }
+}

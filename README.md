@@ -29,7 +29,9 @@ Setup downloads about 230 MB with git and about 1 GB of binary dependencies. Fet
 3. Choose a version. Pressing Enter picks the newest verified version.
 4. The first time, Git asks you to sign in to GitHub. Sign in with the account that has access to the Unreal Engine
    repository.
-5. When fetching and building finish, Setup runs `Samples/HelloWorld.verse` and prints `Hello, World!`.
+5. When fetching and building finish, Setup runs `Samples/HelloWorld/HelloWorld.verse` and prints `Hello, World!`.
+6. If VS Code is installed, Setup asks whether to install the Verse Playground extension (see [VS Code](#vs-code)).
+   `-InstallExtension Yes` or `-InstallExtension No` answers without asking.
 
 The engine goes to `UnrealEngine/` by default. Use `-InstallDir` to put it somewhere else.
 
@@ -42,8 +44,8 @@ Running `Setup.bat` again switches the same folder to the chosen version and reb
 ## Running Verse
 
 ```bat
-UnrealEngine\Engine\Binaries\Win64\verse.exe Samples\HelloWorld.verse
-UnrealEngine\Engine\Binaries\Win64\verse.exe Samples\HelloWorld.verse Verse
+UnrealEngine\Engine\Binaries\Win64\verse.exe Samples\HelloWorld\HelloWorld.verse
+UnrealEngine\Engine\Binaries\Win64\verse.exe Samples\HelloWorld\HelloWorld.verse Verse
 ```
 
 `verse.exe` calls `Main` in the file. Arguments after the script path are passed in `Args`.
@@ -57,12 +59,15 @@ Compile errors are printed as `file(line,column,line,column): Verse compiler err
 
 ### Samples
 
+Each sample is a folder with one program in it. Keep to one program per folder for your own code too: the VS Code
+language server checks all files in a folder together, so two `Main` functions in one folder conflict.
+
 | File | Shows |
 |---|---|
-| `Samples/HelloWorld.verse` | The smallest program, and reading command-line arguments |
-| `Samples/FailureContext.verse` | Expressions that can fail, failure contexts, and `<decides>` functions |
-| `Samples/Concurrency.verse` | Structured concurrency with `race` and `sync` |
-| `Samples/Modules.verse` | Modules, access specifiers, abstract classes and inheritance, and effects |
+| `Samples/HelloWorld/HelloWorld.verse` | The smallest program, and reading command-line arguments |
+| `Samples/FailureContext/FailureContext.verse` | Expressions that can fail, failure contexts, and `<decides>` functions |
+| `Samples/Concurrency/Concurrency.verse` | Structured concurrency with `race` and `sync` |
+| `Samples/Modules/Modules.verse` | Modules, access specifiers, abstract classes and inheritance, and effects |
 
 ### What is available
 
@@ -72,6 +77,26 @@ Compile errors are printed as `file(line,column,line,column): Verse compiler err
   not run as is.
 - `verse.exe` has a `--mount` option for loading modules from other folders, but it is not implemented yet.
   Define modules in the same file as `Main`.
+
+## VS Code
+
+`Extension/verse-playground.vsix` is a VS Code extension for this playground. Setup offers to install it, or install
+it yourself with "Extensions: Install from VSIX..." in VS Code. Open this repository's folder (or any folder below it)
+and the extension finds `verse.exe` by itself.
+
+| Feature | Details |
+|---|---|
+| Run | The ▶ button in the editor title runs the open file in a terminal, so `InputLine` works. "Verse: Run Verse File with Arguments..." passes arguments |
+| Debug | The button next to it, or F5. Breakpoints, step over / into / out, the call stack and local variables |
+| Syntax highlighting | Copied from your engine checkout the first time the extension starts. Reload the window when it asks |
+| Errors | Compile errors from running a file appear in the Problems panel |
+| Errors while typing, hover, go to definition, completion | Needs the Verse language server, see below |
+
+The language server is not part of this repository or of the Unreal Engine source. It comes with the Verse extension
+(`epicgames.verse`) that UEFN installs into VS Code, which is not on the VS Code Marketplace. If you have UEFN, Verse
+Playground uses that server with the Verse version of your engine checkout. Disable the UEFN Verse extension for the
+workspace, or both servers run and every error is shown twice; Verse Playground tells you when it is enabled. Without
+UEFN, everything else in the table still works.
 
 ## Versions
 
@@ -109,3 +134,16 @@ Pass a folder name or the start of a commit hash to `-Version` to use that versi
 Files that the module dependencies do not cover, such as files that UnrealBuildTool reads directly and the bundled
 compiler, are listed in `Tools/ManifestRules.psd1` together with the reason for each. When a new commit fails to
 build, first check whether something needs to be added there.
+
+### Building the VS Code extension (for maintainers)
+
+The extension's source is in `Extension/`. Building it needs Node.js 22.18 or later.
+
+```bat
+cd Extension
+npm ci
+npm run package
+```
+
+This type-checks, runs the tests and writes `Extension/verse-playground.vsix`. Commit the new `.vsix` so that users
+need no Node.js.

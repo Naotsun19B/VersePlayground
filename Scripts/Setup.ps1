@@ -9,7 +9,8 @@ Setup.bat in the repository root runs this script. It:
   2. Lets you choose one of the verified engine versions under Versions/.
   3. Fetches only that commit, and only the directories listed for it, from the Unreal Engine repository.
   4. Downloads only the binary dependencies listed for it.
-  5. Builds verse.exe and runs Samples/HelloWorld.verse to confirm that it works.
+  5. Builds verse.exe and runs Samples/HelloWorld/HelloWorld.verse to confirm that it works.
+  6. Offers to install the Verse Playground extension into VS Code.
 
 Your GitHub account must have access to the Unreal Engine repository. Git asks you to sign in the first time.
 
@@ -31,6 +32,9 @@ checkouts at one folder to download each file only once.
 Number of compile processes. Defaults to a value based on the installed memory, since each compile process can
 use around 3 GB.
 
+.PARAMETER InstallExtension
+Whether to install the VS Code extension in Extension/verse-playground.vsix: Ask (default), Yes or No.
+
 .EXAMPLE
 .\Setup.bat
 
@@ -47,7 +51,10 @@ param(
 
     [string] $GitDependenciesCache,
 
-    [int] $MaxParallelActions = 0
+    [int] $MaxParallelActions = 0,
+
+    [ValidateSet('Ask', 'Yes', 'No')]
+    [string] $InstallExtension = 'Ask'
 )
 
 Set-StrictMode -Version 3.0
@@ -248,9 +255,9 @@ function Invoke-VerseBuild {
 function Test-VerseExecutable {
     param([string] $VersePath)
 
-    Write-Step 'Running Samples/HelloWorld.verse'
+    Write-Step 'Running Samples/HelloWorld/HelloWorld.verse'
 
-    $sample = Join-Path $RepoRoot 'Samples\HelloWorld.verse'
+    $sample = Join-Path $RepoRoot 'Samples\HelloWorld\HelloWorld.verse'
     $output = & $VersePath $sample
     $output | ForEach-Object { Write-Host $_ }
     if ($LASTEXITCODE -ne 0 -or -not ($output -match 'Hello')) {
@@ -272,6 +279,38 @@ function Save-LocalState {
     [System.IO.File]::WriteAllText($LocalStateFile, ($state | ConvertTo-Json) + "`n", $utf8NoBom)
 }
 
+# Installs the extension that runs, debugs and highlights Verse files in VS Code. The extension reads the location of
+# verse.exe from the local state file, so it is installed after that file is written.
+function Install-VSCodeExtension {
+    $vsix = Join-Path $RepoRoot 'Extension\verse-playground.vsix'
+    if (-not (Test-Path -LiteralPath $vsix)) {
+        return
+    }
+
+    $code = Get-Command code -ErrorAction SilentlyContinue
+    if ($null -eq $code) {
+        Write-Host ''
+        Write-Host 'VS Code was not found on PATH. To use the VS Code extension, install it from:'
+        Write-Host "  $vsix"
+        return
+    }
+
+    $shouldInstall = $InstallExtension -eq 'Yes'
+    if ($InstallExtension -eq 'Ask') {
+        Write-Step 'VS Code extension'
+        Write-Host 'The Verse Playground extension runs and debugs Verse files from VS Code and highlights them.'
+        $answer = Read-Host 'Install it into VS Code? [Y/n]'
+        $shouldInstall = [string]::IsNullOrWhiteSpace($answer) -or $answer -match '^[Yy]'
+    }
+    if (-not $shouldInstall) {
+        Write-Host "Skipped. You can install it later from $vsix"
+        return
+    }
+
+    Invoke-Native $code.Source @('--install-extension', $vsix, '--force')
+    Write-Host "Open $RepoRoot in VS Code and open a .verse file to start."
+}
+
 if (-not $InstallDir) {
     $InstallDir = Join-Path $RepoRoot 'UnrealEngine'
 }
@@ -289,6 +328,7 @@ Invoke-VerseBuild
 $versePath = Join-Path $InstallDir 'Engine\Binaries\Win64\verse.exe'
 Test-VerseExecutable -VersePath $versePath
 Save-LocalState -EngineVersion $engineVersion -VersePath $versePath
+Install-VSCodeExtension
 
 Write-Step 'Done'
 Write-Host "verse.exe: $versePath"
