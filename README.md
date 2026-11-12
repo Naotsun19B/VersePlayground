@@ -10,6 +10,8 @@ the Verse command-line tool. After that, you can write a single `.verse` file an
 This repository contains no Epic Games code or binaries.
 Setup fetches the engine source from the Epic Games repository on GitHub with your own access.
 
+[Demo video: running and debugging Verse samples in VS Code](videos/RunAndDebug.mp4)
+
 ## Requirements
 
 | Item | Details |
