@@ -11,5 +11,17 @@
                        "maxVersion":  "10.9.99999.0",
                        "visualStudioComponent":  "Microsoft.VisualStudio.Component.Windows11SDK.26100"
                    },
+    "visualCpp":  {
+                      "minVersion":  "14.50.35723",
+                      "maxVersionExclusive":  "14.52",
+                      "bannedVersions":  [
+                                             "14.51.0-14.51.99999",
+                                             "14.50.0-14.50.35722"
+                                         ],
+                      "minimumVisualStudioVersion":  "17.14",
+                      "visualStudioVersion":  "18.0",
+                      "visualStudioComponent":  "Microsoft.VisualStudio.Component.VC.14.50.18.0.x86.x64",
+                      "clangMajorVersion":  20
+                  },
     "notes":  "Setup into an empty folder builds verse.exe with EpicClang 20.1.8 and runs every sample."
 }

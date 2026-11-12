@@ -11,7 +11,8 @@ combines it with the rules in ManifestRules.psd1, and writes three files to Vers
 
   sparse-paths.txt  Directories for git sparse checkout (cone mode).
   gitdepsignore.txt Whitelist that Setup.ps1 copies to .gitdepsignore so GitDependencies downloads only these files.
-  version.json      Commit information, the Windows SDK the engine requires, and the verification state.
+  version.json      Commit information, the Windows SDK and MSVC toolchain the engine requires, and the
+                    verification state.
 
 The generated version starts as unverified. Run Setup.ps1 -Version <folder> into an empty folder, and when
 verse.exe builds and runs the samples, set "verified" to true and fill "verifiedDate" in version.json.
@@ -125,17 +126,59 @@ function Get-GitValue {
 # installs the SDK the engine is built against. Setup.ps1 compares the range with the installed SDKs before it
 # downloads anything, because UnrealBuildTool rejects the platform only once the build starts.
 function Get-WindowsSdkRequirement {
-    $sdkConfigPath = Join-Path $EngineDir 'Engine\Config\Windows\Windows_SDK.json'
-    $sdkConfig = Get-Content -LiteralPath $sdkConfigPath -Raw | ConvertFrom-Json
-    $component = @($sdkConfig.VisualStudioSuggestedComponents |
+    param([object] $SdkConfig)
+
+    $component = @($SdkConfig.VisualStudioSuggestedComponents |
         Where-Object { $_ -match '^Microsoft\.VisualStudio\.Component\.Windows1[01]SDK\.[0-9]+$' })
     if ($component.Count -ne 1) {
-        throw "Expected one Windows SDK component in VisualStudioSuggestedComponents of $sdkConfigPath."
+        throw "Expected one Windows SDK component in VisualStudioSuggestedComponents of $SdkConfigPath."
     }
     return [ordered]@{
-        minVersion = $sdkConfig.MinVersion
-        maxVersion = $sdkConfig.MaxVersion
+        minVersion = $SdkConfig.MinVersion
+        maxVersion = $SdkConfig.MaxVersion
         visualStudioComponent = $component[0]
+    }
+}
+
+# Reads which MSVC toolchains UnrealBuildTool accepts as the STL and libraries for the bundled EpicClang.
+# UnrealBuildTool compares the ProductVersion of each toolchain's cl.exe with MinimumVisualCppVersion and
+# BannedVisualCppVersions, and MinimumRequiredClangVersion maps an MSVC version to the oldest Clang that can use it,
+# so MSVC versions that need a newer Clang than the bundled one are excluded with an upper bound.
+function Get-VisualCppRequirement {
+    param([object] $SdkConfig)
+
+    $clangDir = Join-Path $EngineDir 'Engine\Binaries\Win64\EpicClang'
+    $clangMajors = @(Get-ChildItem -LiteralPath $clangDir -Directory |
+        Where-Object { $_.Name -match '^[0-9]+$' } |
+        ForEach-Object { [int] $_.Name })
+    if ($clangMajors.Count -eq 0) {
+        throw "No bundled EpicClang was found under $clangDir. Run the engine's Setup.bat first."
+    }
+    $clangMajor = ($clangMajors | Measure-Object -Maximum).Maximum
+
+    # Entries look like "14.52-22": MSVC 14.52 and later need Clang 22 or later.
+    $upperBound = $null
+    foreach ($entry in $SdkConfig.MinimumRequiredClangVersion) {
+        $parts = $entry.Split('-')
+        if ([int] $parts[1] -gt $clangMajor -and ($null -eq $upperBound -or [version] $parts[0] -lt $upperBound)) {
+            $upperBound = [version] $parts[0]
+        }
+    }
+
+    $component = @($SdkConfig.VisualStudio2026SuggestedComponents |
+        Where-Object { $_ -match '^Microsoft\.VisualStudio\.Component\.VC\.[0-9.]+\.x86\.x64$' })
+    if ($component.Count -ne 1) {
+        throw "Expected one MSVC x86.x64 component in VisualStudio2026SuggestedComponents of $SdkConfigPath."
+    }
+
+    return [ordered]@{
+        minVersion = $SdkConfig.MinimumVisualCppVersion
+        maxVersionExclusive = $(if ($null -ne $upperBound) { $upperBound.ToString() } else { $null })
+        bannedVersions = @($SdkConfig.BannedVisualCppVersions)
+        minimumVisualStudioVersion = $SdkConfig.MinimumVisualStudio2022Version
+        visualStudioVersion = $SdkConfig.MinimumVisualStudio2026Version
+        visualStudioComponent = $component[0]
+        clangMajorVersion = $clangMajor
     }
 }
 
@@ -143,8 +186,13 @@ $commit = Get-GitValue -Arguments @('rev-parse', 'HEAD')
 $branch = Get-GitValue -Arguments @('rev-parse', '--abbrev-ref', 'HEAD')
 $commitDate = Get-GitValue -Arguments @('log', '-1', '--format=%cI')
 Write-Host "Engine commit: $commit ($branch, $commitDate)"
-$windowsSdk = Get-WindowsSdkRequirement
+$SdkConfigPath = Join-Path $EngineDir 'Engine\Config\Windows\Windows_SDK.json'
+$sdkConfig = Get-Content -LiteralPath $SdkConfigPath -Raw | ConvertFrom-Json
+$windowsSdk = Get-WindowsSdkRequirement -SdkConfig $sdkConfig
 Write-Host "Windows SDK: $($windowsSdk.minVersion) to $($windowsSdk.maxVersion) ($($windowsSdk.visualStudioComponent))"
+$visualCpp = Get-VisualCppRequirement -SdkConfig $sdkConfig
+Write-Host ("MSVC: $($visualCpp.minVersion) to below $($visualCpp.maxVersionExclusive) for EpicClang " +
+    "$($visualCpp.clangMajorVersion) ($($visualCpp.visualStudioComponent))")
 
 # Export the module graph of the target. UnrealBuildTool resolves every module, plugin and external library the
 # target uses, including the ones that are only used for their headers.
@@ -266,6 +314,7 @@ $version = [ordered]@{
     verifiedDate = $null
     estimatedGitDependenciesDownloadMB = $downloadMegabytes
     windowsSdk = $windowsSdk
+    visualCpp = $visualCpp
     notes = $Notes
 }
 
