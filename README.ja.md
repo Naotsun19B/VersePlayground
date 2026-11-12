@@ -145,8 +145,13 @@ npm ci
 npm run package
 ```
 
-型チェックとテストを実行し、`Extension/verse-playground.vsix` を書き出します。利用者が Node.js なしで使えるように、
-新しい `.vsix` をコミットします。
+型チェックとテストを実行し、`Extension/verse-playground.vsix` を書き出します。`Extension/package.json` の `version` を
+上げ、新しい `.vsix` をコミットします。利用者は Node.js なしで使え、どのビルドが入っているかも見分けられます。
+
+パッケージにせずに変更を試すときは、VS Code で `Extension` フォルダを開いて F5（「Run Extension」）を押します。
+拡張をビルドし、インストール済みのものではなくソースの拡張を読み込んだ別ウィンドウ（Extension Development Host）で
+リポジトリのルートを開きます。`Extension/src` に置いたブレークポイントで止まります。単体テストだけなら `Extension` で
+`npm test` を実行します。
 
 ## ライセンス
 

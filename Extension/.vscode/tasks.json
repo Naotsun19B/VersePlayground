@@ -1,0 +1,21 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      // Bundles src/ into dist/extension.js with a source map, so breakpoints in the TypeScript sources bind.
+      "label": "npm: build",
+      "type": "npm",
+      "script": "build",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      // VS Code has no built-in matcher for esbuild, and a missing one would stop the launch. Type errors are
+      // reported by npm run typecheck instead.
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "silent"
+      }
+    }
+  ]
+}

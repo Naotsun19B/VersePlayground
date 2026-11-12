@@ -151,8 +151,13 @@ npm ci
 npm run package
 ```
 
-This type-checks, runs the tests and writes `Extension/verse-playground.vsix`. Commit the new `.vsix` so that users
-need no Node.js.
+This type-checks, runs the tests and writes `Extension/verse-playground.vsix`. Raise `version` in
+`Extension/package.json` and commit the new `.vsix` so that users need no Node.js and can tell which build they have.
+
+To try a change without packaging, open the `Extension` folder in VS Code and press F5 ("Run Extension"). It builds
+the extension and opens the repository root in a second window, the Extension Development Host, that loads the
+extension from source instead of the installed one. Breakpoints in `Extension/src` stop there. `npm test` runs only
+the unit tests in `Extension/test`.
 
 ## License
 
