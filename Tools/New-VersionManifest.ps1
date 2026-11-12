@@ -23,16 +23,25 @@ verse.exe builds and runs the samples, set "verified" to true and fill "verified
 .PARAMETER EngineDir
 Root of the full Unreal Engine checkout (the folder that contains Engine/ and Setup.bat).
 
+.PARAMETER Branch
+Branch that the checked-out commit belongs to, such as ue6-main. It names the version folder. When omitted, the
+branch that is checked out is used, so it is required when the engine checkout is on a detached HEAD.
+
 .PARAMETER Notes
 Free text stored in version.json, such as what was checked.
 
 .EXAMPLE
 .\Tools\New-VersionManifest.ps1 -EngineDir 'D:\UnrealEngine'
+
+.EXAMPLE
+.\Tools\New-VersionManifest.ps1 -EngineDir 'D:\UnrealEngine' -Branch ue6-main
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
     [string] $EngineDir,
+
+    [string] $Branch = '',
 
     [string] $Notes = ''
 )
@@ -228,7 +237,14 @@ function Get-VisualCppRequirement {
 }
 
 $commit = Get-GitValue -Arguments @('rev-parse', 'HEAD')
-$branch = Get-GitValue -Arguments @('rev-parse', '--abbrev-ref', 'HEAD')
+$branch = $Branch
+if ($branch -eq '') {
+    $branch = Get-GitValue -Arguments @('rev-parse', '--abbrev-ref', 'HEAD')
+    # On a detached HEAD, git names the branch "HEAD", which would name the folder Versions/HEAD-<commit>.
+    if ($branch -eq 'HEAD') {
+        throw "$EngineDir is on a detached HEAD. Pass the branch of the commit with -Branch, such as -Branch ue6-main."
+    }
+}
 $commitDate = Get-GitValue -Arguments @('log', '-1', '--format=%cI')
 Write-Host "Engine commit: $commit ($branch, $commitDate)"
 $SdkConfigPath = Join-Path $EngineDir 'Engine\Config\Windows\Windows_SDK.json'

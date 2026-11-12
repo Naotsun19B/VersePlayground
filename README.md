@@ -188,7 +188,8 @@ warns you not to publish it.
    ```
 
    This exports the module dependencies of the `VerseCmd` target with UnrealBuildTool, adds the rules in
-   `Tools/ManifestRules.psd1`, and creates `Versions/<branch>-<commit>/`. The needed patches start as those of the
+   `Tools/ManifestRules.psd1`, and creates `Versions/<branch>-<commit>/`. When the commit is checked out as a detached
+   HEAD, name its branch with `-Branch ue6-main`. The needed patches start as those of the
    newest existing version that still apply to the new commit; the script warns about the ones that no longer apply.
    Update such a patch, or leave it out when the engine has fixed the problem.
 3. Run Setup into an empty folder to check it.
