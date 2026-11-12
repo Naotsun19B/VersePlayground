@@ -7,8 +7,8 @@ Unreal Engine 6 の Verse を、UEFN やエンジンのフルビルドなしに�
 `Setup.bat` を実行すると、Unreal Engine のリポジトリから Verse の実行に必要な部分だけを取得し、
 Verse のコマンドラインツール `verse.exe` をビルドします。あとは `.verse` ファイルを 1 つ書けば、その場で実行して動作を確かめられます。
 
-このリポジトリには Epic Games のコードもバイナリも含まれていません。
-エンジンのソースは、Setup が利用者自身のアクセス権で Epic Games の GitHub リポジトリから取得します。
+このリポジトリには、`Patches/` のエンジンパッチに含まれる変更箇所の前後数行を除き、Epic Games のコードもバイナリも
+含まれていません。エンジンのソースは、Setup が利用者自身のアクセス権で Epic Games の GitHub リポジトリから取得します。
 
 [![VS Code で Verse のサンプルを実行・デバッグする](images/RunAndDebug.gif)](videos/RunAndDebug.mp4)
 
@@ -34,9 +34,11 @@ Verse のコマンドラインツール `verse.exe` をビルドします。あ�
    Visual Studio 2026 があればそこへ追加し、無ければ既存の Visual Studio とは別に Visual Studio 2026 Build Tools を入れる。
    インストール時は管理者権限を求められ、Visual Studio は閉じておく必要がある。
    `-InstallBuildTools Yes` / `-InstallBuildTools No` を付けると質問せずに決める。
-4. 初回は GitHub へのサインインを求められるので、Unreal Engine のリポジトリにアクセスできるアカウントでサインインする。
-5. 取得とビルドが終わると、`Samples/HelloWorld/HelloWorld.verse` が実行されて `Hello, World!` と表示される。
-6. VS Code が入っていれば、Verse Playground 拡張を入れるかを尋ねられる（[VS Code](#vs-code) を参照）。
+4. そのバージョンに使える任意のエンジンパッチが `Patches/` にあれば、どれを当てるかを尋ねられる（[エンジンパッチ](#エンジンパッチ)を参照）。
+   `-Patches <名前>` / `-Patches none` を付けると質問せずに決める。
+5. 初回は GitHub へのサインインを求められるので、Unreal Engine のリポジトリにアクセスできるアカウントでサインインする。
+6. エンジンパッチを当てて `verse.exe` をビルドし、`Samples/HelloWorld/HelloWorld.verse` を実行して `Hello, World!` と表示する。
+7. VS Code が入っていれば、Verse Playground 拡張を入れるかを尋ねられる（[VS Code](#vs-code) を参照）。
    `-InstallExtension Yes` / `-InstallExtension No` を付けると質問せずに決める。
 
 エンジンは既定で `UnrealEngine/` に置かれます。別の場所にするときは `-InstallDir` を指定します。
@@ -75,6 +77,7 @@ VS Code の言語サーバーはフォルダ内のファイルをまとめてチ
 | `Samples/FailureContext/FailureContext.verse` | 失敗しうる式と Failure Context、`<decides>` の関数 |
 | `Samples/Concurrency/Concurrency.verse` | `race` と `sync` による構造化並行処理 |
 | `Samples/Modules/Modules.verse` | モジュール、アクセス指定子、抽象クラスと継承、エフェクト |
+| `Samples/Random/Random.verse` | struct、class、`<constructor>` 関数、失敗しうるメソッドで作る乱数生成器。引数でシードを渡すと別の数列になる |
 
 ### 使える機能と制限
 
@@ -112,10 +115,50 @@ UEFN が無くても、表のそれ以外の機能は使えます。
 |---|---|
 | `sparse-paths.txt` | git の sparse checkout で取得するディレクトリ |
 | `gitdepsignore.txt` | エンジンの `GitDependencies` が取得するバイナリ依存のホワイトリスト。Setup が `.gitdepsignore` としてコピーする |
-| `version.json` | コミット、確認したかどうか、ダウンロード量の見積もり、エンジンが必要とする Windows SDK と MSVC ツールチェーン |
+| `version.json` | コミット、確認したかどうか、ダウンロード量の見積もり、エンジンが必要とする Windows SDK と MSVC ツールチェーン、そのバージョンに必要なエンジンパッチ（`patches`） |
 
 Setup は確認済み（`"verified": true`）のバージョンを既定にします。確認していないバージョンを選ぶと警告を表示します。
 `-Version` にフォルダ名かコミットの先頭部分を渡すと、質問せずにそのバージョンを使います。
+
+### エンジンパッチ
+
+`Patches/` には、エンジンのソースへの小さな修正が、エンジンのチェックアウトで `git diff` を取った `.patch` ファイルとして
+1 つずつ入っています。先頭の `Title:` 行と差分より前の文章が、何を直すパッチかの説明です。Setup は取得の後、ビルドの前に
+パッチを当てます。
+
+- そのバージョンの `version.json` の `patches` に書かれたパッチは必ず当てます。当たらなければ、そのバージョンに必要だと
+  分かっているため Setup を止めます。
+- `Patches/` にあるそれ以外のパッチは任意です。Setup が一覧を出して当てるものを尋ね、Enter で前回選んだものを使います。
+  `-Patches 名前1,名前2` で質問せずに選び、`-Patches none` で必要なものだけを当てます。そのバージョンに当たらない任意の
+  パッチは、警告を出して飛ばします。
+- 自分の変更を試すときは、エンジンのチェックアウトを編集してから `git diff > ..\Patches\<名前>.patch` を実行し、先頭に
+  `Title:` 行を足して、Setup で選びます。
+
+Setup はパッチを当てたファイルを `VersePlayground.local.json` に記録し、別のバージョンに切り替える前に元へ戻します。
+バージョンを切り替えるときも、選ぶパッチを変えるときも、元のファイルから当て直します。
+
+| パッチ | 直すこと |
+|---|---|
+| `debugger-constructor-self` | `<constructor>` 関数の中や、そこから呼ばれる関数の中で止まると、デバッグ中に `verse.exe` が終了する。エンジンはコンストラクタ関数のために生成するラッパを Self なしで呼び、デバッガはそのフレームを含むコールスタックを作るときにプログラムを止めてしまう |
+#### パッチを公開するときの決まり
+
+パッチの文脈行と削除行は、エンジンのソースそのものです。Unreal Engine EULA の 5(a)(ii) は、30 行までのエンジンのコードの
+断片をパッチに付けて配布することを認めていますが、断片を集めてエンジンのより大きな部分を組み立て直すことは認めていません。
+そのため、このリポジトリに入れるパッチは次を守ります。
+
+- 1 つのパッチが含むエンジンのコード（各ハンクの文脈行と削除行）は、合計 30 行まで。超えるときは `git diff -U1` で文脈を
+  減らす。git が `@@ ... @@` の見出しの後ろに付ける、周りの関数の行も数に入る。`git apply` には要らないので見出しから消す。
+- すべてのパッチを合わせても、1 つのエンジンのファイルから含むのは 30 行まで。
+- エンジンのファイルを丸ごとコピーしたファイルやバイナリを含めない。パッチを当てた後のファイルをそのままリポジトリに置かない。
+  EULA の 5(a)(i) により、エンジンのコードそのものを公開で配布できるのは、Epic の GitHub の fork か Fab を通す場合だけです。
+
+`Tools\Test-EnginePatches.ps1` がこれを検査します。パッチを足したり変えたりしたら、コミットの前に実行します。
+
+```powershell
+.\Tools\Test-EnginePatches.ps1
+```
+
+自分のパソコンだけで使うパッチには、この制限はありません。Setup は決まりを超えるパッチも当てますが、公開しないよう警告します。
 
 ### 新しいエンジンのコミットを追加する（メンテナー向け）
 
@@ -127,7 +170,8 @@ Setup は確認済み（`"verified": true`）のバージョンを既定にし�
    ```
 
    UnrealBuildTool で `VerseCmd` ターゲットのモジュール依存を書き出し、`Tools/ManifestRules.psd1` のルールを足して
-   `Versions/<ブランチ>-<コミット>/` を作ります。
+   `Versions/<ブランチ>-<コミット>/` を作ります。必要なパッチは、既存の最新バージョンのうち新しいコミットにも当たるものを
+   引き継ぎ、当たらなくなったものは警告します。そのパッチを直すか、エンジン側で直っていれば外します。
 3. 空のフォルダに Setup して確かめる。
 
    ```bat
@@ -164,4 +208,5 @@ npm run package
 `Samples/` のプログラムは学習用です。表記を残す必要もなく、自由にコピー・改変・再利用できます。
 
 Setup が取得する Unreal Engine のソースとバイナリは、このリポジトリには含まれません。アクセス権を得るときに同意した
-Unreal Engine EULA が引き続き適用されます。
+Unreal Engine EULA が引き続き適用されます。`Patches/` のパッチは変更箇所の前後数行のエンジンのソースを
+[パッチを公開するときの決まり](#パッチを公開するときの決まり)の範囲で含み、その部分にも Unreal Engine EULA が適用されます。

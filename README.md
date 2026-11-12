@@ -7,8 +7,9 @@ A playground for trying Verse in Unreal Engine 6 without UEFN and without buildi
 `Setup.bat` fetches only the parts of the Unreal Engine repository that Verse needs and builds `verse.exe`,
 the Verse command-line tool. After that, you can write a single `.verse` file and run it right away to see what it does.
 
-This repository contains no Epic Games code or binaries.
-Setup fetches the engine source from the Epic Games repository on GitHub with your own access.
+This repository contains no Epic Games code or binaries, apart from the few lines of context around each change in
+the engine patches in `Patches/`. Setup fetches the engine source from the Epic Games repository on GitHub with your
+own access.
 
 [![Running and debugging Verse samples in VS Code](images/RunAndDebug.gif)](videos/RunAndDebug.mp4)
 
@@ -35,10 +36,13 @@ Setup downloads about 230 MB with git and about 1 GB of binary dependencies. Fet
    Tools next to your other Visual Studio products when there is none. Windows asks for administrator permission,
    and Visual Studio must be closed while it installs. `-InstallBuildTools Yes` or `-InstallBuildTools No` answers
    without asking.
-4. The first time, Git asks you to sign in to GitHub. Sign in with the account that has access to the Unreal Engine
+4. If `Patches/` has optional engine patches for that version, Setup asks which ones to apply (see
+   [Engine patches](#engine-patches)). `-Patches <names>` or `-Patches none` answers without asking.
+5. The first time, Git asks you to sign in to GitHub. Sign in with the account that has access to the Unreal Engine
    repository.
-5. When fetching and building finish, Setup runs `Samples/HelloWorld/HelloWorld.verse` and prints `Hello, World!`.
-6. If VS Code is installed, Setup asks whether to install the Verse Playground extension (see [VS Code](#vs-code)).
+6. Setup applies the engine patches, builds `verse.exe`, runs `Samples/HelloWorld/HelloWorld.verse` and prints
+   `Hello, World!`.
+7. If VS Code is installed, Setup asks whether to install the Verse Playground extension (see [VS Code](#vs-code)).
    `-InstallExtension Yes` or `-InstallExtension No` answers without asking.
 
 The engine goes to `UnrealEngine/` by default. Use `-InstallDir` to put it somewhere else.
@@ -77,6 +81,7 @@ language server checks all files in a folder together, so two `Main` functions i
 | `Samples/FailureContext/FailureContext.verse` | Expressions that can fail, failure contexts, and `<decides>` functions |
 | `Samples/Concurrency/Concurrency.verse` | Structured concurrency with `race` and `sync` |
 | `Samples/Modules/Modules.verse` | Modules, access specifiers, abstract classes and inheritance, and effects |
+| `Samples/Random/Random.verse` | A random number generator built from a struct, a class, a `<constructor>` function and a failable method. Pass a seed as an argument to get other numbers |
 
 ### What is available
 
@@ -116,10 +121,53 @@ UEFN, everything else in the table still works.
 |---|---|
 | `sparse-paths.txt` | Directories that git fetches with sparse checkout |
 | `gitdepsignore.txt` | Whitelist of binary dependencies for the engine's `GitDependencies`. Setup copies it to `.gitdepsignore` |
-| `version.json` | The commit, whether it has been verified, the estimated download size, and the Windows SDK and MSVC toolchain the engine needs |
+| `version.json` | The commit, whether it has been verified, the estimated download size, the Windows SDK and MSVC toolchain the engine needs, and the engine patches it needs (`patches`) |
 
 Setup defaults to a verified version (`"verified": true`) and warns when you choose one that has not been verified.
 Pass a folder name or the start of a commit hash to `-Version` to use that version without being asked.
+
+### Engine patches
+
+`Patches/` holds small fixes to the engine source, one `.patch` file each, made with `git diff` in the engine
+checkout. The `Title:` line and the text above the diff explain what the patch fixes. Setup applies them after
+fetching and before building.
+
+- The patches listed in `patches` of the version's `version.json` are always applied. If one does not apply, Setup
+  stops, because that version is known to need it.
+- Every other patch in `Patches/` is optional. Setup lists them and asks which to apply; Enter keeps the ones chosen
+  last time. `-Patches name1,name2` chooses without asking, and `-Patches none` applies only the needed ones. An
+  optional patch that does not apply to the version is skipped with a warning.
+- To try a change of your own, run `git diff > ..\Patches\<name>.patch` in the engine checkout after editing it,
+  add a `Title:` line at the top, and choose it in Setup.
+
+Setup remembers which files it patched in `VersePlayground.local.json` and restores them before it switches the
+checkout to another version, so switching versions and choosing other patches both start from the original files.
+
+| Patch | Fixes |
+|---|---|
+| `debugger-constructor-self` | Debugging ends `verse.exe` when it stops inside a `<constructor>` function, or in a function that one calls. The engine calls the wrapper it generates for a constructor function without a Self, and the debugger stops the program when it lists a call stack with such a frame |
+#### Rules for publishing a patch
+
+The context lines and the removed lines of a patch are engine source. Section 5(a)(ii) of the Unreal Engine EULA
+allows distributing snippets of Engine Code of up to 30 lines with a patch, but not putting snippets together into a
+larger part of the engine. So the patches in this repository follow these rules:
+
+- A patch quotes at most 30 lines of engine code in total, counting the context lines and the removed lines of every
+  hunk. When it quotes more, make the context smaller with `git diff -U1`. The line of the enclosing function that
+  git puts after each `@@ ... @@` header counts as well; `git apply` does not need it, so delete it from the header.
+- All the patches together quote at most 30 lines of any one engine file.
+- A patch does not add a copy of an engine file or change a binary file. Patched files are never put in the
+  repository as they are: under section 5(a)(i), Engine Code itself can be distributed publicly only through a fork
+  of Epic's GitHub repository or through Fab.
+
+`Tools\Test-EnginePatches.ps1` checks these rules. Run it before committing a new or changed patch.
+
+```powershell
+.\Tools\Test-EnginePatches.ps1
+```
+
+A patch that you use only on your own computer has no such limit. Setup applies a patch that breaks the rules, but
+warns you not to publish it.
 
 ### Adding a new engine commit (for maintainers)
 
@@ -131,7 +179,9 @@ Pass a folder name or the start of a commit hash to `-Version` to use that versi
    ```
 
    This exports the module dependencies of the `VerseCmd` target with UnrealBuildTool, adds the rules in
-   `Tools/ManifestRules.psd1`, and creates `Versions/<branch>-<commit>/`.
+   `Tools/ManifestRules.psd1`, and creates `Versions/<branch>-<commit>/`. The needed patches start as those of the
+   newest existing version that still apply to the new commit; the script warns about the ones that no longer apply.
+   Update such a patch, or leave it out when the engine has fixed the problem.
 3. Run Setup into an empty folder to check it.
 
    ```bat
@@ -170,4 +220,6 @@ The scripts, tools and VS Code extension in this repository are released under t
 The programs in `Samples/` are for learning. Copy, modify and reuse them freely, without keeping any notice.
 
 The Unreal Engine source and binaries that Setup fetches are not part of this repository. They stay under the Unreal
-Engine EULA that you accepted to get access to them.
+Engine EULA that you accepted to get access to them. The patches in `Patches/` quote a few lines of the engine source
+around each change, within the limit in [Rules for publishing a patch](#rules-for-publishing-a-patch); those lines
+stay under the Unreal Engine EULA as well.
