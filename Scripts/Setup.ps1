@@ -13,8 +13,9 @@ Setup.bat in the repository root runs this script. It:
      what is missing with the Visual Studio Installer.
   4. Fetches only that commit, and only the directories listed for it, from the Unreal Engine repository.
   5. Downloads only the binary dependencies listed for it.
-  6. Builds verse.exe and runs Samples/HelloWorld/HelloWorld.verse to confirm that it works.
-  7. Offers to install the Verse Playground extension into VS Code.
+  6. Applies the engine patches in Patches/ that the version needs, and the optional ones you choose.
+  7. Builds verse.exe and runs Samples/HelloWorld/HelloWorld.verse to confirm that it works.
+  8. Offers to install the Verse Playground extension into VS Code.
 
 Your GitHub account must have access to the Unreal Engine repository. Git asks you to sign in the first time.
 
@@ -44,11 +45,19 @@ toolchain goes into Visual Studio 2026, or into a new Visual Studio 2026 Build T
 .PARAMETER InstallExtension
 Whether to install the VS Code extension in Extension/verse-playground.vsix: Ask (default), Yes or No.
 
+.PARAMETER Patches
+Optional engine patches to apply, by file name in Patches/ without .patch, separated by commas. "none" applies
+only the patches that the chosen version needs. When omitted, Setup asks, and pressing Enter keeps the patches
+chosen last time. The patches that the version needs are always applied.
+
 .EXAMPLE
 .\Setup.bat
 
 .EXAMPLE
 .\Setup.bat -Version ue6-main-f9f48a4bf1b9 -InstallDir D:\VerseEngine
+
+.EXAMPLE
+.\Setup.bat -Patches none
 #>
 [CmdletBinding()]
 param(
@@ -66,7 +75,10 @@ param(
     [string] $InstallBuildTools = 'Ask',
 
     [ValidateSet('Ask', 'Yes', 'No')]
-    [string] $InstallExtension = 'Ask'
+    [string] $InstallExtension = 'Ask',
+
+    # A string rather than string[], because Setup.bat passes "a,b" through -File as one argument.
+    [string] $Patches
 )
 
 Set-StrictMode -Version 3.0
@@ -74,12 +86,15 @@ $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $VersionsDir = Join-Path $RepoRoot 'Versions'
+$PatchesDir = Join-Path $RepoRoot 'Patches'
 $LocalStateFile = Join-Path $RepoRoot 'VersePlayground.local.json'
 $LocalBranch = 'verseplayground'
 $MinimumGitVersion = [version] '2.27'
 $VsWherePath = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
 $VsInstallerPath = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\setup.exe'
 $WindowsKitsKey = 'HKLM:\SOFTWARE\Microsoft\Windows Kits\Installed Roots'
+
+Import-Module (Join-Path $PSScriptRoot 'EnginePatchRules.psm1') -Force
 
 function Write-Step {
     param([string] $Message)
@@ -431,6 +446,8 @@ function Get-EngineVersions {
                 # Versions generated before the build tools were recorded have no windowsSdk or visualCpp entry.
                 WindowsSdk = $(if ($info.PSObject.Properties['windowsSdk']) { $info.windowsSdk } else { $null })
                 VisualCpp = $(if ($info.PSObject.Properties['visualCpp']) { $info.visualCpp } else { $null })
+                # Names of the files in Patches/ that this version needs, without .patch.
+                Patches = $(if ($info.PSObject.Properties['patches']) { @($info.patches) } else { @() })
             }
         }
     }
@@ -487,7 +504,7 @@ function Select-EngineVersion {
 # before the first fetch, so files outside the list are never written. With --filter=blob:none the server sends
 # file contents only for the paths that are checked out.
 function Update-EngineCheckout {
-    param([object] $EngineVersion)
+    param([object] $EngineVersion, [object] $PreviousState)
 
     Write-Step "Fetching $($EngineVersion.Name) into $InstallDir"
 
@@ -495,6 +512,10 @@ function Update-EngineCheckout {
         New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
         Invoke-Native git @('-C', $InstallDir, 'init', '--quiet')
         Invoke-Native git @('-C', $InstallDir, 'remote', 'add', 'origin', $RepositoryUrl)
+    }
+    else {
+        # Patched files would stop git from switching commits, and every patch is applied again afterwards.
+        Undo-EnginePatches -PreviousState $PreviousState
     }
 
     # Engine paths are deep, so long path support avoids checkout failures under a long InstallDir.
@@ -528,6 +549,214 @@ function Update-BinaryDependencies {
         $arguments += "--cache=$GitDependenciesCache"
     }
     Invoke-Native $gitDependencies $arguments
+}
+
+# Reads the state file that the last Setup wrote, or returns $null when there is none or it cannot be read.
+function Read-LocalState {
+    if (-not (Test-Path -LiteralPath $LocalStateFile)) {
+        return $null
+    }
+
+    try {
+        return Get-Content -LiteralPath $LocalStateFile -Raw | ConvertFrom-Json
+    }
+    catch {
+        Write-Warning "$LocalStateFile could not be read, so the patches chosen last time are not known: $_"
+        return $null
+    }
+}
+
+# Returns a list property of the state file, or an empty list when the state file or the property is missing.
+function Get-LocalStateList {
+    param([object] $State, [string] $Name)
+
+    if ($null -eq $State -or -not $State.PSObject.Properties[$Name]) {
+        return @()
+    }
+    return @($State.$Name | Where-Object { $_ })
+}
+
+# Lists Patches/*.patch. The first "Title:" line of a file is its title. git apply skips the text before the first
+# diff, so each patch carries its own explanation at the top.
+function Get-EnginePatches {
+    if (-not (Test-Path -LiteralPath $PatchesDir)) {
+        return @()
+    }
+
+    $patchList = foreach ($file in Get-ChildItem -LiteralPath $PatchesDir -Filter '*.patch' -File) {
+        $titleLine = Get-Content -LiteralPath $file.FullName -TotalCount 10 |
+            Where-Object { $_ -match '^Title:' } |
+            Select-Object -First 1
+        [pscustomobject] @{
+            Name = $file.BaseName
+            Path = $file.FullName
+            Title = $(if ($titleLine) { ($titleLine -replace '^Title:\s*', '') } else { $file.BaseName })
+        }
+    }
+    return @($patchList | Sort-Object -Property Name)
+}
+
+# Decides which optional patches to apply, before anything is downloaded, so that Setup asks all its questions
+# first. Optional patches are the ones in Patches/ that the chosen version does not need.
+function Select-OptionalPatches {
+    param([object] $EngineVersion, [object] $PreviousState)
+
+    $candidates = @(Get-EnginePatches | Where-Object { $EngineVersion.Patches -notcontains $_.Name })
+    $candidateNames = @($candidates | ForEach-Object { $_.Name })
+
+    if ($Patches) {
+        $requested = @($Patches.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        if ($requested.Count -eq 1 -and $requested[0] -eq 'none') {
+            return @()
+        }
+
+        foreach ($name in $requested) {
+            if ($EngineVersion.Patches -contains $name) {
+                Write-Host "$name is always applied to $($EngineVersion.Name), so -Patches does not need it."
+            }
+            elseif ($candidateNames -notcontains $name) {
+                throw "-Patches names '$name', but there is no Patches/$name.patch."
+            }
+        }
+        return @($requested | Where-Object { $candidateNames -contains $_ })
+    }
+
+    if ($candidates.Count -eq 0) {
+        return @()
+    }
+
+    # The previous choice is the default. A patch that has since been removed from Patches/ drops out of it.
+    $previous = @(Get-LocalStateList -State $PreviousState -Name 'optionalPatches' |
+        Where-Object { $candidateNames -contains $_ })
+
+    Write-Step 'Choose optional engine patches'
+    for ($index = 0; $index -lt $candidates.Count; $index++) {
+        $mark = if ($previous -contains $candidates[$index].Name) { 'x' } else { ' ' }
+        Write-Host ("  [{0}] ({1}) {2}" -f ($index + 1), $mark, $candidates[$index].Name)
+        Write-Host "        $($candidates[$index].Title)"
+    }
+    $answer = Read-Host 'Numbers separated by commas, 0 for none, Enter to keep the ones marked with x'
+    if ([string]::IsNullOrWhiteSpace($answer)) {
+        return $previous
+    }
+    if ($answer.Trim() -eq '0') {
+        return @()
+    }
+
+    $chosen = foreach ($part in $answer.Split(',')) {
+        $choice = 0
+        if (-not [int]::TryParse($part.Trim(), [ref] $choice) -or $choice -lt 1 -or $choice -gt $candidates.Count) {
+            throw "'$($part.Trim())' is not a number from the list."
+        }
+        $candidates[$choice - 1].Name
+    }
+    return @($chosen | Select-Object -Unique)
+}
+
+# Runs git and returns whether it succeeded, without showing its output. Windows PowerShell turns what a native
+# command writes to stderr into errors that stop the script, so the preference is relaxed while git runs.
+function Test-GitCommand {
+    param([string[]] $Arguments)
+
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & git @Arguments 2>&1 | Out-Null
+        return ($LASTEXITCODE -eq 0)
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
+}
+
+# Restores the files that the last Setup patched in this checkout to their committed content.
+function Undo-EnginePatches {
+    param([object] $PreviousState)
+
+    if ($null -eq $PreviousState -or -not $PreviousState.PSObject.Properties['engineDir']) {
+        return
+    }
+    # The state file describes one checkout. Another -InstallDir is a different checkout with its own files.
+    $previousDir = [System.IO.Path]::GetFullPath($PreviousState.engineDir)
+    if (-not [string]::Equals($previousDir, $InstallDir, [StringComparison]::OrdinalIgnoreCase)) {
+        return
+    }
+
+    $patchedFiles = @(Get-LocalStateList -State $PreviousState -Name 'patchedFiles')
+    # A checkout whose first fetch failed has no commit to restore from yet.
+    if ($patchedFiles.Count -eq 0 -or -not (Test-GitCommand @('-C', $InstallDir, 'rev-parse', '--verify', 'HEAD'))) {
+        return
+    }
+    # A patch can also add files that the engine does not have. Restoring those means deleting them.
+    $trackedFiles = @($patchedFiles | Where-Object { Test-GitCommand @('-C', $InstallDir, 'cat-file', '-e', "HEAD:$_") })
+    foreach ($addedFile in @($patchedFiles | Where-Object { $trackedFiles -notcontains $_ })) {
+        $addedPath = Join-Path $InstallDir $addedFile
+        if (Test-Path -LiteralPath $addedPath) {
+            Remove-Item -LiteralPath $addedPath
+        }
+    }
+    if ($trackedFiles.Count -gt 0) {
+        Invoke-Native git (@('-C', $InstallDir, 'restore', '--source=HEAD', '--staged', '--worktree', '--') +
+            $trackedFiles)
+    }
+}
+
+# Applies the patches that the chosen version needs and the chosen optional ones. A needed patch that does not apply
+# stops Setup, because the version is known to need it; an optional one is skipped with a warning. Returns the
+# applied patch names and the files they changed, for the state file.
+function Install-EnginePatches {
+    param([object] $EngineVersion, [string[]] $OptionalPatches)
+
+    Write-Step 'Applying engine patches'
+
+    $available = @(Get-EnginePatches)
+    $applied = New-Object 'System.Collections.Generic.List[string]'
+    $patchedFiles = New-Object 'System.Collections.Generic.List[string]'
+    $planned = @($EngineVersion.Patches | ForEach-Object { [pscustomobject] @{ Name = $_; Needed = $true } }) +
+        @($OptionalPatches | ForEach-Object { [pscustomobject] @{ Name = $_; Needed = $false } })
+    if ($planned.Count -eq 0) {
+        Write-Host 'None'
+    }
+
+    foreach ($entry in $planned) {
+        $patch = $available | Where-Object { $_.Name -eq $entry.Name } | Select-Object -First 1
+        if ($null -eq $patch) {
+            throw "$($EngineVersion.Name) needs Patches/$($entry.Name).patch, which does not exist."
+        }
+
+        # A patch of your own is fine on your own computer, so Setup only warns; publishing it is what the EULA limits.
+        foreach ($problem in (Get-EnginePatchReport -Path $patch.Path).Problems) {
+            Write-Warning "Patches/$($patch.Name).patch: $problem Do not publish this patch (see Engine patches in README.md)."
+        }
+
+        if (Test-GitCommand @('-C', $InstallDir, 'apply', '--check', $patch.Path)) {
+            Invoke-Native git @('-C', $InstallDir, 'apply', $patch.Path)
+            Write-Host "Applied $($patch.Name): $($patch.Title)"
+        }
+        elseif (Test-GitCommand @('-C', $InstallDir, 'apply', '--reverse', '--check', $patch.Path)) {
+            # A checkout patched by hand, or by a Setup that stopped before it wrote the state file.
+            Write-Host "Already applied $($patch.Name): $($patch.Title)"
+        }
+        elseif ($entry.Needed) {
+            throw ("Patches/$($patch.Name).patch does not apply to $($EngineVersion.Name), which needs it. " +
+                'Update the patch or the "patches" list in its version.json.')
+        }
+        else {
+            Write-Warning "Skipped $($patch.Name): it does not apply to $($EngineVersion.Name)."
+            continue
+        }
+
+        $applied.Add($patch.Name)
+        # --numstat prints "added<TAB>deleted<TAB>path" for each file the patch changes.
+        foreach ($line in (& git -C $InstallDir apply --numstat $patch.Path)) {
+            $patchedFiles.Add(($line -split "`t", 3)[2])
+        }
+    }
+
+    return [pscustomobject] @{
+        Names = $applied.ToArray()
+        Files = @($patchedFiles | Select-Object -Unique)
+    }
 }
 
 function Get-DefaultParallelActions {
@@ -564,13 +793,18 @@ function Test-VerseExecutable {
 
 # Records where verse.exe is so that other tools in this repository, such as the VS Code extension, can find it.
 function Save-LocalState {
-    param([object] $EngineVersion, [string] $VersePath)
+    param([object] $EngineVersion, [string] $VersePath, [string[]] $OptionalPatches, [object] $PatchResult)
 
+    # optionalPatches is the user's choice, kept even when a patch did not apply to this version; patches and
+    # patchedFiles describe what is applied now, so that the next Setup can undo it.
     $state = [ordered] @{
         engineDir = $InstallDir
         versePath = $VersePath
         version = $EngineVersion.Name
         commit = $EngineVersion.Commit
+        patches = @($PatchResult.Names)
+        optionalPatches = @($OptionalPatches)
+        patchedFiles = @($PatchResult.Files)
     }
     $utf8NoBom = New-Object System.Text.UTF8Encoding $false
     [System.IO.File]::WriteAllText($LocalStateFile, ($state | ConvertTo-Json) + "`n", $utf8NoBom)
@@ -614,18 +848,22 @@ if (-not $InstallDir) {
 $InstallDir = [System.IO.Path]::GetFullPath($InstallDir)
 
 Test-Prerequisites
+$previousState = Read-LocalState
 $engineVersion = Select-EngineVersion -Versions (Get-EngineVersions)
 if (-not $engineVersion.Verified) {
     Write-Warning "$($engineVersion.Name) has not been verified. The build may fail."
 }
+$optionalPatches = @(Select-OptionalPatches -EngineVersion $engineVersion -PreviousState $previousState)
 Confirm-BuildToolchain -EngineVersion $engineVersion
-Update-EngineCheckout -EngineVersion $engineVersion
+Update-EngineCheckout -EngineVersion $engineVersion -PreviousState $previousState
 Update-BinaryDependencies -EngineVersion $engineVersion
+$patchResult = Install-EnginePatches -EngineVersion $engineVersion -OptionalPatches $optionalPatches
 Invoke-VerseBuild
 
 $versePath = Join-Path $InstallDir 'Engine\Binaries\Win64\verse.exe'
 Test-VerseExecutable -VersePath $versePath
-Save-LocalState -EngineVersion $engineVersion -VersePath $versePath
+Save-LocalState -EngineVersion $engineVersion -VersePath $versePath -OptionalPatches $optionalPatches `
+    -PatchResult $patchResult
 Install-VSCodeExtension
 
 Write-Step 'Done'

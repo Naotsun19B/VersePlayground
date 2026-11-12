@@ -11,8 +11,11 @@ combines it with the rules in ManifestRules.psd1, and writes three files to Vers
 
   sparse-paths.txt  Directories for git sparse checkout (cone mode).
   gitdepsignore.txt Whitelist that Setup.ps1 copies to .gitdepsignore so GitDependencies downloads only these files.
-  version.json      Commit information, the Windows SDK and MSVC toolchain the engine requires, and the
-                    verification state.
+  version.json      Commit information, the Windows SDK and MSVC toolchain the engine requires, the engine patches
+                    from Patches/ that the version needs, and the verification state.
+
+The needed patches start as those of the newest existing version that still apply to this engine checkout. A patch
+that no longer applies is reported; update it, or drop it from "patches" when the engine has fixed the problem.
 
 The generated version starts as unverified. Run Setup.ps1 -Version <folder> into an empty folder, and when
 verse.exe builds and runs the samples, set "verified" to true and fill "verifiedDate" in version.json.
@@ -109,6 +112,48 @@ function Write-TextFile {
     param([string] $Path, [string[]] $Lines)
 
     [System.IO.File]::WriteAllText($Path, (($Lines -join "`n") + "`n"), $Utf8NoBom)
+}
+
+# Returns the patches that the newest existing version needs and that apply to the engine checkout, or are already
+# applied to it. A new engine commit usually needs the same fixes; one that no longer applies is reported, because
+# the engine may have fixed the problem or changed the code around it.
+function Get-CarriedPatches {
+    param([string] $ExcludedFolder)
+
+    $newest = Get-ChildItem -LiteralPath (Join-Path $RepoRoot 'Versions') -Directory |
+        Where-Object { $_.Name -ne $ExcludedFolder } |
+        ForEach-Object { Join-Path $_.FullName 'version.json' } |
+        Where-Object { Test-Path -LiteralPath $_ } |
+        ForEach-Object { Get-Content -LiteralPath $_ -Raw | ConvertFrom-Json } |
+        Sort-Object -Property { [datetimeoffset] $_.commitDate } -Descending |
+        Select-Object -First 1
+    if ($null -eq $newest -or -not $newest.PSObject.Properties['patches']) {
+        return @()
+    }
+
+    $carried = foreach ($name in @($newest.patches)) {
+        $patchPath = Join-Path $RepoRoot "Patches\$name.patch"
+        # Windows PowerShell turns git's stderr into errors that stop the script, so it is relaxed for the checks.
+        $previousPreference = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            & git -C $EngineDir apply --check $patchPath 2>&1 | Out-Null
+            $applies = ($LASTEXITCODE -eq 0)
+            & git -C $EngineDir apply --reverse --check $patchPath 2>&1 | Out-Null
+            $alreadyApplied = ($LASTEXITCODE -eq 0)
+        }
+        finally {
+            $ErrorActionPreference = $previousPreference
+        }
+
+        if ($applies -or $alreadyApplied) {
+            $name
+        }
+        else {
+            Write-Warning "Patches/$name.patch does not apply to this commit, so it is not listed in version.json."
+        }
+    }
+    return @($carried)
 }
 
 # Runs git in the engine checkout and returns the first line of its output.
@@ -305,6 +350,8 @@ else {
     New-Item -ItemType Directory -Path $outputDir | Out-Null
 }
 
+$patches = @(Get-CarriedPatches -ExcludedFolder $folderName)
+
 $version = [ordered]@{
     commit = $commit
     branch = $branch
@@ -312,6 +359,7 @@ $version = [ordered]@{
     generatedDate = (Get-Date -Format 'yyyy-MM-dd')
     verified = $false
     verifiedDate = $null
+    patches = $patches
     estimatedGitDependenciesDownloadMB = $downloadMegabytes
     windowsSdk = $windowsSdk
     visualCpp = $visualCpp
@@ -326,5 +374,6 @@ Write-Host ''
 Write-Host "Wrote Versions/$folderName"
 Write-Host "  Sparse paths       : $($sparsePaths.Count) ($moduleCount from the module graph)"
 Write-Host "  Binary dependencies: $selectedFiles files, about $downloadMegabytes MB to download"
+Write-Host "  Engine patches     : $(if ($patches.Count -gt 0) { $patches -join ', ' } else { 'none' })"
 Write-Host ''
 Write-Host "Next: run Setup.bat -Version $folderName into an empty folder, then mark it verified in version.json."

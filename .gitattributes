@@ -4,3 +4,7 @@
 
 # Lists consumed by git and GitDependencies.
 Versions/**/*.txt text eol=lf
+
+# Engine patches applied with git apply, kept exactly as git diff wrote them. Their context lines start with the
+# space of the diff format followed by the tabs of the engine source, which git diff --check would report.
+Patches/*.patch text eol=lf -whitespace
