@@ -63,6 +63,11 @@
         # The verse-simulation-sleep patch makes VerseCmd depend on this module, and the module graph is exported
         # from the unpatched engine.
         'Engine/Plugins/Verse/VerseSimulation'
+
+        # The verse-ide-analysis patch makes VerseCmd depend on VerseAssist, whose public headers use uLangLSP;
+        # the module graph is exported from the unpatched engine. uLangJSON is already in the module graph.
+        'Engine/Source/Runtime/Solaris/VerseAssist'
+        'Engine/Source/Runtime/Solaris/uLangLSP'
     )
 
     # Paths that keep the binary dependencies of every host platform. The UnrealBuildTool build copies the

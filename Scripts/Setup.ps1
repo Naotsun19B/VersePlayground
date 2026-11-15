@@ -775,11 +775,111 @@ function Invoke-VerseBuild {
     Write-Host "Using up to $parallel compile processes"
 
     $runUbt = Join-Path $InstallDir 'Engine\Build\BatchFiles\RunUBT.bat'
-    Invoke-Native $runUbt @('VerseCmd', 'Win64', 'Development', "-MaxParallelActions=$parallel")
+    try {
+        Invoke-Native $runUbt @('VerseCmd', 'Win64', 'Development', "-MaxParallelActions=$parallel")
+    }
+    catch {
+        # The linker cannot replace verse.exe while a process runs it, and the VS Code extension keeps one running
+        # for a moment whenever it checks a Verse file.
+        $running = @(Get-Process -Name 'verse' -ErrorAction SilentlyContinue)
+        if ($running.Count -gt 0) {
+            throw ("$($_.Exception.Message) verse.exe is running right now, which can stop the build from writing " +
+                'its output. Close VS Code, then run Setup again.')
+        }
+        throw
+    }
+}
+
+# Sends one request to "verse.exe --ide-request" and returns the parsed answer. The request goes through
+# System.Diagnostics.Process with UTF-8 without a BOM in both directions: the pipe of Windows PowerShell 5.1 encodes
+# with $OutputEncoding, which is ASCII by default and breaks paths that contain Japanese or other non-ASCII text.
+function Invoke-VerseIdeRequest {
+    param([string] $VersePath, [string] $RequestJson)
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $VersePath
+    $startInfo.Arguments = '--ide-request'
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardInput = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.StandardOutputEncoding = $utf8NoBom
+    $startInfo.StandardErrorEncoding = $utf8NoBom
+
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $startInfo
+    try {
+        [void] $process.Start()
+        # Writing the bytes to the base stream avoids the encoding of StandardInput, which may carry a BOM.
+        $requestBytes = $utf8NoBom.GetBytes($RequestJson)
+        $process.StandardInput.BaseStream.Write($requestBytes, 0, $requestBytes.Length)
+        $process.StandardInput.BaseStream.Flush()
+        $process.StandardInput.Close()
+
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit(60000)) {
+            $process.Kill()
+            throw 'verse.exe --ide-request did not answer within 60 seconds.'
+        }
+        $stdout = $stdoutTask.Result
+        $stderr = $stderrTask.Result
+    }
+    finally {
+        $process.Dispose()
+    }
+
+    $responseLine = $stdout -split "`r?`n" | Where-Object { $_.StartsWith('@verse-ide ') } | Select-Object -First 1
+    if (-not $responseLine) {
+        throw "verse.exe --ide-request wrote no answer. $($stderr.Trim())"
+    }
+    try {
+        return $responseLine.Substring('@verse-ide '.Length) | ConvertFrom-Json
+    }
+    catch {
+        throw "The answer of verse.exe --ide-request is not valid JSON: $responseLine"
+    }
+}
+
+# Checks the editor request mode that Patches/verse-ide-analysis.patch adds: a ping, then a check of HelloWorld that
+# must report no errors and no warnings.
+function Test-VerseIdeRequest {
+    param([string] $VersePath)
+
+    Write-Step 'Checking the editor requests of verse.exe (ping, check Samples/HelloWorld)'
+
+    $patchHint = 'Check that Patches/verse-ide-analysis.patch was applied and that the build used it.'
+    try {
+        $ping = Invoke-VerseIdeRequest -VersePath $VersePath -RequestJson '{"protocol":1,"kind":"ping"}'
+        if (-not $ping.PSObject.Properties['ok'] -or $ping.ok -ne $true) {
+            throw 'The ping was not answered with ok: true.'
+        }
+        Write-Host 'ping: ok'
+
+        $folder = (Join-Path $RepoRoot 'Samples\HelloWorld').Replace('\', '/')
+        $checkJson = '{"protocol":1,"kind":"check","folder":' + (ConvertTo-Json -InputObject $folder) +
+            ',"overrides":[]}'
+        $check = Invoke-VerseIdeRequest -VersePath $VersePath -RequestJson $checkJson
+        if (-not $check.PSObject.Properties['ok'] -or $check.ok -ne $true) {
+            $reason = if ($check.PSObject.Properties['error']) { $check.error } else { 'no reason was given' }
+            throw "The check was refused: $reason"
+        }
+        $problems = @($check.diagnostics | Where-Object { $_.severity -ne 'info' })
+        if ($problems.Count -gt 0) {
+            throw ("The check of Samples/HelloWorld reported $($problems.Count) error or warning diagnostics: " +
+                $problems[0].message)
+        }
+        Write-Host 'check: no errors or warnings'
+    }
+    catch {
+        throw "verse.exe was built but its editor requests do not work. $($_.Exception.Message) $patchHint"
+    }
 }
 
 function Test-VerseExecutable {
-    param([string] $VersePath)
+    param([object] $EngineVersion, [string] $VersePath)
 
     Write-Step 'Running Samples/HelloWorld/HelloWorld.verse'
 
@@ -788,6 +888,11 @@ function Test-VerseExecutable {
     $output | ForEach-Object { Write-Host $_ }
     if ($LASTEXITCODE -ne 0 -or -not ($output -match 'Hello')) {
         throw 'verse.exe was built but did not run the sample correctly.'
+    }
+
+    # Only the versions that list the analysis patch have the editor request mode.
+    if ($EngineVersion.Patches -contains 'verse-ide-analysis') {
+        Test-VerseIdeRequest -VersePath $VersePath
     }
 }
 
@@ -861,7 +966,7 @@ $patchResult = Install-EnginePatches -EngineVersion $engineVersion -OptionalPatc
 Invoke-VerseBuild
 
 $versePath = Join-Path $InstallDir 'Engine\Binaries\Win64\verse.exe'
-Test-VerseExecutable -VersePath $versePath
+Test-VerseExecutable -EngineVersion $engineVersion -VersePath $versePath
 Save-LocalState -EngineVersion $engineVersion -VersePath $versePath -OptionalPatches $optionalPatches `
     -PatchResult $patchResult
 Install-VSCodeExtension

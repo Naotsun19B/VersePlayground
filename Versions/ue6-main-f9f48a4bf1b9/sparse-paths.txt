@@ -105,11 +105,13 @@ Engine/Source/Runtime/Slate
 Engine/Source/Runtime/SlateCore
 Engine/Source/Runtime/Sockets
 Engine/Source/Runtime/Solaris/SolarisBridge
+Engine/Source/Runtime/Solaris/VerseAssist
 Engine/Source/Runtime/Solaris/uLangCore
 Engine/Source/Runtime/Solaris/uLangDAP
 Engine/Source/Runtime/Solaris/uLangDigests
 Engine/Source/Runtime/Solaris/uLangIdeSupport
 Engine/Source/Runtime/Solaris/uLangJSON
+Engine/Source/Runtime/Solaris/uLangLSP
 Engine/Source/Runtime/Solaris/uLangUE
 Engine/Source/Runtime/StateStream
 Engine/Source/Runtime/StaticMeshDescription

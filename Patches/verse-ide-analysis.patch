@@ -1,0 +1,1061 @@
+Title: verse.exe compiles every .verse file in the folder as one program and answers editor requests
+
+verse.exe compiles only the file that it runs, so a function in another file of the same folder cannot be called,
+and an editor has no way to check Verse code with the compiler that runs it. This patch makes verse.exe compile
+every .verse file directly in the folder of the file it runs as one program, up to 500 files and 32 MB. It also adds
+--ide-request, which reads one request of an editor from stdin and writes the answer to stdout as one line of JSON:
+the diagnostics of a folder, or the hover text or the definition at a position. A run and a request build in the
+same IDE with the same build settings, so the editor reports the errors that a run would. The definitions come from
+Epic's VerseAssist module, which this patch links. Both leave out the UTF-8 byte order mark at the start of a file,
+which editors do not show, so that the columns of its first line match the editor. It applies to
+ue6-main-f9f48a4bf1b9 and ue6-main-7dc0dff55638.
+
+diff --git a/Engine/Source/Programs/VerseCmd/Private/IdeRequest.cpp b/Engine/Source/Programs/VerseCmd/Private/IdeRequest.cpp
+new file mode 100644
+index 000000000000..aa8263c260b0
+--- /dev/null
++++ b/Engine/Source/Programs/VerseCmd/Private/IdeRequest.cpp
+@@ -0,0 +1,722 @@
++// Copyright (c) 2026 Naotsun
++
++// VersePlayground: the analysis mode of verse.exe for an editor.
++//
++// A request names a folder, and the program is every .verse file directly in it, as for a run (ListProgramFiles). The
++// open documents of the editor come with the request as overrides, and their text is compiled instead of the file on
++// disk. The program is built in the IDE and with the build settings of a run (MakeScriptIde, MakeProgramBuildSettings),
++// so the editor reports the errors that a run would.
++//
++// Positions in requests and answers are 0-based lines and 0-based UTF-8 byte offsets within the line, and the end of
++// a range is excluded, which is how uLang counts them. Paths are absolute and use '/' as the separator.
++//
++// Only a malformed request and an IDE that cannot be made are refused with "ok": false. Errors in the Verse code are
++// an ok answer that carries them as diagnostics.
++
++#include "IdeRequest.h"
++#include "Containers/Array.h"
++#include "Containers/StringConv.h"
++#include "Containers/StringView.h"
++#include "Containers/UnrealString.h"
++#include "ISolarisIde.h"
++#include "Logging/LogVerbosity.h"
++#include "Misc/Optional.h"
++#include "Misc/Paths.h"
++#include "ProgramFiles.h"
++#include "Script.h"
++#include "SolBuildDiagnostic.h"
++#include "Templates/SharedPointer.h"
++#include "ULangUEUtils.h"
++#include "VerseAssist.h"
++#include "uLang/Common/Text/FilePathUtils.h"
++#include "uLang/JSON/JSON.h"
++#include "uLang/Semantics/Expression.h"
++#include "uLang/SourceProject/SourceDataProject.h"
++#include "uLang/Syntax/VstNode.h"
++#include "uLang/Toolchain/ProgramBuildManager.h"
++#include <stdio.h>  // for fread and fwrite
++#include <string.h> // for strcmp
++#if PLATFORM_WINDOWS
++#include <fcntl.h> // for _O_BINARY
++#include <io.h>    // for _setmode
++#endif
++
++namespace {
++// The version of the protocol. An editor that speaks another one asks the user to run Setup again.
++constexpr int32 ProtocolVersion = 1;
++
++// The most bytes that a request may have. The editor does not send larger ones.
++constexpr int64 MaxRequestBytes = 32 * 1024 * 1024;
++
++// The answer is the one line of stdout that starts with this, so that no other output can be taken for it.
++constexpr const char* AnswerPrefix = "@verse-ide ";
++
++// Writes JSON without line breaks, which the answer needs to stay on one line. JSONStringWriter is a PrettyWriter.
++using FJsonWriter = rapidjson::Writer<uLang::JSONStringBuffer>;
++
++enum class ERequestKind : uint8
++{
++    Ping,
++    Check,
++    Hover,
++    Definition,
++};
++
++// The text of an open document of the editor.
++struct FIdeOverride
++{
++    // Absolute path with '/' separators, directly in the folder of the request.
++    FString Path;
++
++    // The text, which points into the request document.
++    uLang::CUTF8StringView Text;
++};
++
++struct FIdeRequest
++{
++    // What the request asks for.
++    ERequestKind Kind = ERequestKind::Ping;
++
++    // The folder whose .verse files make up the program, with '/' separators and no trailing one. Empty for a ping.
++    FString Folder;
++
++    // The file under the cursor, for a hover or a definition.
++    FString Target;
++
++    // The position under the cursor in Target, for a hover or a definition.
++    uLang::STextPosition Position;
++
++    // The open documents of the folder, no two of them for the same file.
++    TArray<FIdeOverride> Overrides;
++};
++
++// One file of the program.
++struct FProgramFile
++{
++    // The path that the file is added to the IDE with.
++    FString Path;
++
++    // The index in FIdeRequest::Overrides of the text to compile, or INDEX_NONE to compile the file on disk.
++    int32 OverrideIndex = INDEX_NONE;
++};
++
++// One diagnostic of the answer.
++struct FIdeDiagnostic
++{
++    // Absolute path with '/' separators, or empty for a diagnostic of the whole project.
++    FString Path;
++
++    // The number of the diagnostic, such as 3506.
++    int32 Code = 0;
++
++    // "error", "warning" or "info".
++    const char* Severity = "info";
++
++    // The message, which may span several lines.
++    FString Message;
++
++    // Where the diagnostic points, 0-based.
++    uLang::STextRange Range;
++};
++
++// The answer to a hover request.
++struct FHoverResult
++{
++    // The signature or the type of the definition that the node under the cursor refers to.
++    uLang::CUTF8String Text;
++
++    // The node under the cursor.
++    uLang::STextRange Range;
++};
++
++// The answer to a definition request.
++struct FDefinitionResult
++{
++    // The file that holds the definition, with '/' separators.
++    FString Path;
++
++    // The definition in that file.
++    uLang::STextRange Range;
++};
++
++AUTORTFM_DISABLE const char* GetSeverityName(ELogVerbosity::Type Verbosity)
++{
++    // Fatal also fails the build, so it is an error to the editor as well.
++    if (Verbosity == ELogVerbosity::Error || Verbosity == ELogVerbosity::Fatal)
++    {
++        return "error";
++    }
++    if (Verbosity == ELogVerbosity::Warning)
++    {
++        return "warning";
++    }
++    return "info";
++}
++
++AUTORTFM_DISABLE FIdeDiagnostic MakeIdeDiagnostic(const FSolDiagnostic& Diagnostic)
++{
++    // FSolDiagnostic counts lines and columns from 1, as an editor shows them, and still excludes the end column.
++    // A diagnostic without a location has zeros, which stay 0.
++    const auto ToZeroBased = [](int32 Value) { return static_cast<uint32>(FMath::Max(0, Value - 1)); };
++
++    FIdeDiagnostic Result;
++    Result.Path = Diagnostic.Location.FilePath;
++    FPaths::NormalizeFilename(Result.Path);
++    Result.Code = static_cast<int32>(Diagnostic.Info.ReferenceCode);
++    Result.Severity = GetSeverityName(Diagnostic.Info.Severity);
++    Result.Message = Diagnostic.Info.Message;
++    Result.Range = uLang::STextRange(ToZeroBased(Diagnostic.Location.RowSpan.X),
++                                     ToZeroBased(Diagnostic.Location.ColSpan.X),
++                                     ToZeroBased(Diagnostic.Location.RowSpan.Y),
++                                     ToZeroBased(Diagnostic.Location.ColSpan.Y));
++    return Result;
++}
++
++AUTORTFM_DISABLE void WriteText(FJsonWriter& Writer, const FString& Text)
++{
++    const auto Utf8 = StringCast<UTF8CHAR>(*Text, Text.Len());
++    Writer.String(reinterpret_cast<const char*>(Utf8.Get()), static_cast<rapidjson::SizeType>(Utf8.Length()));
++}
++
++AUTORTFM_DISABLE void WriteText(FJsonWriter& Writer, const uLang::CUTF8String& Text)
++{
++    Writer.String(Text.AsCString(), static_cast<rapidjson::SizeType>(Text.ByteLen()));
++}
++
++AUTORTFM_DISABLE void WritePosition(FJsonWriter& Writer, uint32 Line, uint32 Byte)
++{
++    Writer.StartObject();
++    Writer.Key("line");
++    Writer.Uint(Line);
++    Writer.Key("byte");
++    Writer.Uint(Byte);
++    Writer.EndObject();
++}
++
++AUTORTFM_DISABLE void WriteRange(FJsonWriter& Writer, const uLang::STextRange& Range)
++{
++    Writer.StartObject();
++    Writer.Key("start");
++    WritePosition(Writer, Range.BeginRow(), Range.BeginColumn());
++    Writer.Key("end");
++    WritePosition(Writer, Range.EndRow(), Range.EndColumn());
++    Writer.EndObject();
++}
++
++AUTORTFM_DISABLE void PrintAnswer(const uLang::JSONStringBuffer& Buffer)
++{
++    // The newline first starts the answer on a line of its own, even after output that did not end its line.
++    fputs("\n", stdout);
++    fputs(AnswerPrefix, stdout);
++    fwrite(Buffer.GetString(), 1, Buffer.GetSize(), stdout);
++    fputs("\n", stdout);
++    fflush(stdout);
++}
++
++AUTORTFM_DISABLE int AnswerFailure(const FString& Error)
++{
++    uLang::JSONStringBuffer Buffer;
++    FJsonWriter Writer(Buffer);
++    Writer.StartObject();
++    Writer.Key("protocol");
++    Writer.Int(ProtocolVersion);
++    Writer.Key("ok");
++    Writer.Bool(false);
++    Writer.Key("error");
++    WriteText(Writer, Error);
++    Writer.EndObject();
++    PrintAnswer(Buffer);
++    return 1;
++}
++
++AUTORTFM_DISABLE int AnswerSuccess(ERequestKind Kind,
++                                   const TArray<FIdeDiagnostic>& Diagnostics,
++                                   const TOptional<FHoverResult>& Hover,
++                                   const TOptional<FDefinitionResult>& Definition)
++{
++    uLang::JSONStringBuffer Buffer;
++    FJsonWriter Writer(Buffer);
++    Writer.StartObject();
++    Writer.Key("protocol");
++    Writer.Int(ProtocolVersion);
++    Writer.Key("ok");
++    Writer.Bool(true);
++
++    if (Kind != ERequestKind::Ping)
++    {
++        Writer.Key("diagnostics");
++        Writer.StartArray();
++        for (const FIdeDiagnostic& Diagnostic : Diagnostics)
++        {
++            Writer.StartObject();
++            Writer.Key("path");
++            WriteText(Writer, Diagnostic.Path);
++            Writer.Key("code");
++            Writer.Int(Diagnostic.Code);
++            Writer.Key("severity");
++            Writer.String(Diagnostic.Severity);
++            Writer.Key("message");
++            WriteText(Writer, Diagnostic.Message);
++            Writer.Key("range");
++            WriteRange(Writer, Diagnostic.Range);
++            Writer.EndObject();
++        }
++        Writer.EndArray();
++    }
++
++    if (Kind == ERequestKind::Hover)
++    {
++        Writer.Key("hover");
++        if (Hover)
++        {
++            Writer.StartObject();
++            Writer.Key("text");
++            WriteText(Writer, Hover->Text);
++            Writer.Key("range");
++            WriteRange(Writer, Hover->Range);
++            Writer.EndObject();
++        }
++        else
++        {
++            Writer.Null();
++        }
++    }
++
++    if (Kind == ERequestKind::Definition)
++    {
++        Writer.Key("definition");
++        if (Definition)
++        {
++            Writer.StartObject();
++            Writer.Key("path");
++            WriteText(Writer, Definition->Path);
++            Writer.Key("range");
++            WriteRange(Writer, Definition->Range);
++            Writer.EndObject();
++        }
++        else
++        {
++            Writer.Null();
++        }
++    }
++
++    Writer.EndObject();
++    PrintAnswer(Buffer);
++    return 0;
++}
++
++AUTORTFM_DISABLE bool ReadRequestBytes(TArray<uint8>& OutBytes, FString& OutError)
++{
++    constexpr int32 ChunkSize = 64 * 1024;
++    OutBytes.Reset();
++    for (;;)
++    {
++        const int32 Offset = OutBytes.Num();
++        OutBytes.SetNumUninitialized(Offset + ChunkSize);
++        const size_t NumRead = fread(OutBytes.GetData() + Offset, 1, static_cast<size_t>(ChunkSize), stdin);
++        OutBytes.SetNum(Offset + static_cast<int32>(NumRead), EAllowShrinking::No);
++        if (OutBytes.Num() > MaxRequestBytes)
++        {
++            OutError = FString::Printf(TEXT("The request is larger than %lld MB."), MaxRequestBytes / (1024 * 1024));
++            return false;
++        }
++        if (NumRead < static_cast<size_t>(ChunkSize))
++        {
++            if (ferror(stdin))
++            {
++                OutError = TEXT("The request could not be read from stdin.");
++                return false;
++            }
++            return true;
++        }
++    }
++}
++
++AUTORTFM_DISABLE const uLang::JSONValue* FindMember(const uLang::JSONValue& Object, const char* Name)
++{
++    const auto Member = Object.FindMember(Name);
++    return (Member != Object.MemberEnd()) ? &Member->value : nullptr;
++}
++
++AUTORTFM_DISABLE FString ToFString(const uLang::JSONValue& Value)
++{
++    return FString(FUtf8StringView(reinterpret_cast<const UTF8CHAR*>(Value.GetString()),
++                                   static_cast<int32>(Value.GetStringLength())));
++}
++
++// Reads an absolute path and gives it '/' separators, which is the spelling that the IDE finds snippets by.
++AUTORTFM_DISABLE bool ReadPath(const uLang::JSONValue* Value, const char* Name, FString& OutPath, FString& OutError)
++{
++    if (!Value || !Value->IsString())
++    {
++        OutError = FString::Printf(TEXT("The request has no \"%s\" string."), *FString(Name));
++        return false;
++    }
++
++    OutPath = ToFString(*Value);
++    if (OutPath.IsEmpty() || FPaths::IsRelative(OutPath))
++    {
++        OutError = FString::Printf(TEXT("\"%s\" is not an absolute path: '%s'."), *FString(Name), *OutPath);
++        return false;
++    }
++    FPaths::NormalizeFilename(OutPath);
++    return true;
++}
++
++AUTORTFM_DISABLE bool ReadPosition(const uLang::JSONValue* Value, uLang::STextPosition& OutPosition, FString& OutError)
++{
++    const uLang::JSONValue* Line = (Value && Value->IsObject()) ? FindMember(*Value, "line") : nullptr;
++    const uLang::JSONValue* Byte = (Value && Value->IsObject()) ? FindMember(*Value, "byte") : nullptr;
++    if (!Line || !Line->IsUint() || !Byte || !Byte->IsUint())
++    {
++        OutError = TEXT("The request has no \"position\" with a \"line\" and a \"byte\" of 0 or more.");
++        return false;
++    }
++
++    OutPosition._Row = Line->GetUint();
++    OutPosition._Column = Byte->GetUint();
++    return true;
++}
++
++// Accepts only .verse files directly in the folder, so that a request cannot make verse.exe read any other file.
++AUTORTFM_DISABLE bool ReadOverrides(const uLang::JSONValue* Value, FIdeRequest& InOutRequest, FString& OutError)
++{
++    if (!Value)
++    {
++        return true;
++    }
++    if (!Value->IsArray())
++    {
++        OutError = TEXT("\"overrides\" of the request is not an array.");
++        return false;
++    }
++    if (static_cast<int64>(Value->Size()) > VerseCmd::MaxProgramFiles)
++    {
++        OutError = FString::Printf(TEXT("The request has more than %d overrides."), VerseCmd::MaxProgramFiles);
++        return false;
++    }
++
++    for (rapidjson::SizeType Index = 0; Index < Value->Size(); ++Index)
++    {
++        const uLang::JSONValue& Entry = (*Value)[Index];
++        const uLang::JSONValue* Text = Entry.IsObject() ? FindMember(Entry, "text") : nullptr;
++        if (!Text || !Text->IsString())
++        {
++            OutError = TEXT("An override of the request has no \"text\" string.");
++            return false;
++        }
++
++        FIdeOverride Override;
++        if (!ReadPath(Entry.IsObject() ? FindMember(Entry, "path") : nullptr, "path", Override.Path, OutError))
++        {
++            return false;
++        }
++        if (!FPaths::IsSamePath(FPaths::GetPath(Override.Path), InOutRequest.Folder) ||
++            !FPaths::GetExtension(Override.Path).Equals(TEXT("verse"), ESearchCase::IgnoreCase))
++        {
++            OutError = FString::Printf(TEXT("The override '%s' is not a .verse file directly in '%s'."),
++                                       *Override.Path,
++                                       *InOutRequest.Folder);
++            return false;
++        }
++        for (const FIdeOverride& Other : InOutRequest.Overrides)
++        {
++            if (FPaths::IsSamePath(Other.Path, Override.Path))
++            {
++                OutError = FString::Printf(TEXT("The request has two overrides for '%s'."), *Override.Path);
++                return false;
++            }
++        }
++
++        Override.Text = uLang::CUTF8StringView(Text->GetString(), Text->GetStringLength());
++        InOutRequest.Overrides.Add(MoveTemp(Override));
++    }
++    return true;
++}
++
++AUTORTFM_DISABLE bool ReadRequest(const uLang::JSONDocument& Document, FIdeRequest& OutRequest, FString& OutError)
++{
++    if (!Document.IsObject())
++    {
++        OutError = TEXT("The request is not a JSON object.");
++        return false;
++    }
++
++    const uLang::JSONValue* Protocol = FindMember(Document, "protocol");
++    if (!Protocol || !Protocol->IsInt() || Protocol->GetInt() != ProtocolVersion)
++    {
++        OutError = FString::Printf(TEXT("The request is not of protocol %d, which this verse.exe speaks."),
++                                   ProtocolVersion);
++        return false;
++    }
++
++    const uLang::JSONValue* Kind = FindMember(Document, "kind");
++    const char* KindName = (Kind && Kind->IsString()) ? Kind->GetString() : "";
++    if (!strcmp(KindName, "ping"))
++    {
++        OutRequest.Kind = ERequestKind::Ping;
++        return true;
++    }
++    else if (!strcmp(KindName, "check"))
++    {
++        OutRequest.Kind = ERequestKind::Check;
++    }
++    else if (!strcmp(KindName, "hover"))
++    {
++        OutRequest.Kind = ERequestKind::Hover;
++    }
++    else if (!strcmp(KindName, "definition"))
++    {
++        OutRequest.Kind = ERequestKind::Definition;
++    }
++    else
++    {
++        OutError = TEXT("The request has no \"kind\" of ping, check, hover or definition.");
++        return false;
++    }
++
++    if (!ReadPath(FindMember(Document, "folder"), "folder", OutRequest.Folder, OutError))
++    {
++        return false;
++    }
++    FPaths::NormalizeDirectoryName(OutRequest.Folder);
++
++    if (OutRequest.Kind == ERequestKind::Hover || OutRequest.Kind == ERequestKind::Definition)
++    {
++        if (!ReadPath(FindMember(Document, "target"), "target", OutRequest.Target, OutError) ||
++            !ReadPosition(FindMember(Document, "position"), OutRequest.Position, OutError))
++        {
++            return false;
++        }
++    }
++
++    return ReadOverrides(FindMember(Document, "overrides"), OutRequest, OutError);
++}
++
++// Lists the files of the program: the .verse files on disk, with the text of an override where there is one, and then
++// the overrides of files that are not on disk yet.
++AUTORTFM_DISABLE bool ListRequestFiles(const FIdeRequest& Request, TArray<FProgramFile>& OutFiles, FString& OutError)
++{
++    TArray<FString> Names;
++    if (!VerseCmd::ListProgramFiles(Request.Folder, Names, OutError))
++    {
++        return false;
++    }
++
++    TArray<bool> IsOverrideUsed;
++    IsOverrideUsed.Init(false, Request.Overrides.Num());
++    for (const FString& Name : Names)
++    {
++        FProgramFile& File = OutFiles.AddDefaulted_GetRef();
++        File.Path = FPaths::Combine(Request.Folder, Name);
++        for (int32 Index = 0; Index < Request.Overrides.Num(); ++Index)
++        {
++            // An open document keeps the spelling of the editor, which is the one that it reports diagnostics to.
++            if (!IsOverrideUsed[Index] && FPaths::IsSamePath(Request.Overrides[Index].Path, File.Path))
++            {
++                IsOverrideUsed[Index] = true;
++                File.Path = Request.Overrides[Index].Path;
++                File.OverrideIndex = Index;
++                break;
++            }
++        }
++    }
++
++    for (int32 Index = 0; Index < Request.Overrides.Num(); ++Index)
++    {
++        if (!IsOverrideUsed[Index])
++        {
++            OutFiles.Add(FProgramFile{.Path = Request.Overrides[Index].Path, .OverrideIndex = Index});
++        }
++    }
++
++    if (OutFiles.Num() > VerseCmd::MaxProgramFiles)
++    {
++        OutError = FString::Printf(TEXT("'%s' and the open documents have %d .verse files, more than the %d that one "
++                                        "program may have."),
++                                   *Request.Folder,
++                                   OutFiles.Num(),
++                                   VerseCmd::MaxProgramFiles);
++        return false;
++    }
++    return true;
++}
++
++// Adds the files of the program to the IDE. The IDE does not keep the data sources that it is given, so the caller
++// keeps the returned ones until the answer is written.
++AUTORTFM_DISABLE TArray<TSharedRef<ISolIdeDataSource>> AddRequestFiles(ISolarisIde& Ide,
++                                                                       const FIdeRequest& Request,
++                                                                       const TArray<FProgramFile>& Files)
++{
++    TArray<TSharedRef<ISolIdeDataSource>> DataSources;
++    DataSources.Reserve(Files.Num());
++    for (const FProgramFile& File : Files)
++    {
++        uLang::CUTF8String Path = FULangConversionUtils::FStringToULangStr(File.Path);
++        if (File.OverrideIndex == INDEX_NONE)
++        {
++            // A run adds the files on disk in the same way, so a file with a byte order mark has the same positions.
++            DataSources.Add(VerseCmd::AddFileOnDisk(Ide, File.Path, MoveTemp(Path)));
++            continue;
++        }
++
++        // The IDE reads the file on disk for an empty text, so an empty document is compiled as one empty line.
++        const uLang::CUTF8StringView& OverrideText = Request.Overrides[File.OverrideIndex].Text;
++        uLang::CUTF8String Text = OverrideText.IsEmpty() ? uLang::CUTF8String("\n") : uLang::CUTF8String(OverrideText);
++        DataSources.Add(
++            Ide.AddDataSource(uLang::TSRef<uLang::CSourceDataSnippet>::New(MoveTemp(Path), MoveTemp(Text))));
++    }
++    return DataSources;
++}
++
++// Finds the node at Position in the file that was added as Path, and the definition that it refers to. Returns false
++// when there is none, which is always the case while the program has a syntax error, because the compiler then skips
++// the semantic analysis.
++AUTORTFM_DISABLE bool FindDefinitionAt(ISolarisIde& Ide,
++                                       const FString& Path,
++                                       const uLang::STextPosition& Position,
++                                       const Verse::Vst::Node*& OutNode,
++                                       uLang::VerseAssist::SDefinition& OutDefinition)
++{
++    const uLang::TSPtr<uLang::CProgramBuildManager> BuildManager = Ide.GetBuildManager();
++    if (!BuildManager)
++    {
++        return false;
++    }
++    const Verse::Vst::TNodePtr<Verse::Vst::Project>& ProjectVst = BuildManager->GetProjectVst();
++    if (!ProjectVst)
++    {
++        return false;
++    }
++
++    // FindSnippetByFilePath normalizes the path of each snippet but not the one that it is given, so this is
++    // normalized the same way.
++    const uLang::CUTF8String SnippetPath =
++        uLang::FilePathUtils::NormalizePath(FULangConversionUtils::FStringToULangStr(Path));
++    const Verse::Vst::Snippet* Snippet = ProjectVst->FindSnippetByFilePath(SnippetPath);
++    OutNode = Snippet ? Snippet->FindChildByPosition(Position) : nullptr;
++    return OutNode && uLang::VerseAssist::FindDefinitionOfNode(
++                          *OutNode, *BuildManager->GetProgramContext()._Program, OutDefinition);
++}
++
++AUTORTFM_DISABLE void LookUp(ISolarisIde& Ide,
++                             const FIdeRequest& Request,
++                             const TArray<FProgramFile>& Files,
++                             TOptional<FHoverResult>& OutHover,
++                             TOptional<FDefinitionResult>& OutDefinition)
++{
++    // The snippet of the target has the spelling that the file was added with.
++    const FProgramFile* TargetFile = Files.FindByPredicate(
++        [&Request](const FProgramFile& File) { return FPaths::IsSamePath(File.Path, Request.Target); });
++    const Verse::Vst::Node* Node = nullptr;
++    uLang::VerseAssist::SDefinition Definition{};
++    if (!TargetFile || !FindDefinitionAt(Ide, TargetFile->Path, Request.Position, Node, Definition))
++    {
++        return;
++    }
++
++    if (Request.Kind == ERequestKind::Hover)
++    {
++        // The tooltip is empty at the definition itself.
++        if (Definition.Tooltip.IsFilled() && Node->Whence().IsValid())
++        {
++            OutHover = FHoverResult{.Text = Definition.Tooltip, .Range = Node->Whence()};
++        }
++        return;
++    }
++
++    // A definition has no node of its own when the cursor is at the definition itself.
++    const Verse::Vst::Node* DefinitionNode = Definition.AstNode ? Definition.AstNode->GetMappedVstNode() : nullptr;
++    if (!DefinitionNode || !DefinitionNode->Whence().IsValid())
++    {
++        return;
++    }
++    FString DefinitionPath = FULangConversionUtils::ULangStrToFString(DefinitionNode->GetSnippetPath());
++    if (DefinitionPath.IsEmpty())
++    {
++        return;
++    }
++    FPaths::NormalizeFilename(DefinitionPath);
++    OutDefinition = FDefinitionResult{.Path = MoveTemp(DefinitionPath), .Range = DefinitionNode->Whence()};
++}
++}
++
++AUTORTFM_DISABLE int VerseCmd::RunIdeRequest()
++{
++#if PLATFORM_WINDOWS
++    // In text mode, stdout would write each "\n" as "\r\n", and stdin would stop at a Ctrl+Z byte in a document.
++    _setmode(_fileno(stdin), _O_BINARY);
++    _setmode(_fileno(stdout), _O_BINARY);
++#endif
++
++    TArray<uint8> Bytes;
++    FString Error;
++    if (!ReadRequestBytes(Bytes, Error))
++    {
++        return AnswerFailure(Error);
++    }
++
++    // An editor may write the request with a UTF-8 byte order mark.
++    const int32 Start = (Bytes.Num() >= 3 && Bytes[0] == 0xEF && Bytes[1] == 0xBB && Bytes[2] == 0xBF) ? 3 : 0;
++    if (Bytes.Num() <= Start)
++    {
++        return AnswerFailure(TEXT("The request is empty."));
++    }
++
++    // The request document outlives every use of the override texts, which point into it.
++    uLang::JSONAllocator Allocator;
++    uLang::JSONMemoryPoolAllocator MemoryPoolAllocator(RAPIDJSON_ALLOCATOR_DEFAULT_CHUNK_CAPACITY, &Allocator);
++    uLang::JSONDocument Document(&MemoryPoolAllocator, 1024, &Allocator);
++    Document.Parse(reinterpret_cast<const char*>(Bytes.GetData() + Start), static_cast<size_t>(Bytes.Num() - Start));
++    if (Document.HasParseError())
++    {
++        return AnswerFailure(FString::Printf(TEXT("The request is not valid JSON (error %d at byte %llu)."),
++                                             static_cast<int32>(Document.GetParseError()),
++                                             static_cast<uint64>(Document.GetErrorOffset())));
++    }
++
++    FIdeRequest Request;
++    if (!ReadRequest(Document, Request, Error))
++    {
++        return AnswerFailure(Error);
++    }
++    if (Request.Kind == ERequestKind::Ping)
++    {
++        return AnswerSuccess(Request.Kind, {}, {}, {});
++    }
++
++    TArray<FProgramFile> Files;
++    if (!ListRequestFiles(Request, Files, Error))
++    {
++        return AnswerFailure(Error);
++    }
++
++    // The sink owns the storage of the diagnostics, so the IDE may keep the sink as long as it likes.
++    TSharedRef<TArray<FIdeDiagnostic>> Diagnostics = MakeShared<TArray<FIdeDiagnostic>>();
++    const TSharedRef<ISolarisIdeDiagnostics> Sink = MakeIdeDiagnostics(
++        [Diagnostics](const FSolDiagnostic& Diagnostic) { Diagnostics->Add(MakeIdeDiagnostic(Diagnostic)); });
++
++    // ScriptIde keeps the source project, and DataSources keep the files, until the answer is written.
++    TOptional<FScriptIde> ScriptIde = MakeScriptIde(Sink);
++    if (!ScriptIde)
++    {
++        FString Failure = TEXT("verse.exe could not compile its own Verse code.");
++        for (const FIdeDiagnostic& Diagnostic : *Diagnostics)
++        {
++            Failure += TEXT("\n") + Diagnostic.Message;
++        }
++        return AnswerFailure(Failure);
++    }
++    const TArray<TSharedRef<ISolIdeDataSource>> DataSources = AddRequestFiles(*ScriptIde->Ide, Request, Files);
++
++    // BuildAll returns false when the program has errors, which the answer carries as diagnostics.
++    ScriptIde->Ide->BuildAll(MakeProgramBuildSettings(), Sink);
++
++    TOptional<FHoverResult> Hover;
++    TOptional<FDefinitionResult> Definition;
++    if (Request.Kind == ERequestKind::Hover || Request.Kind == ERequestKind::Definition)
++    {
++        LookUp(*ScriptIde->Ide, Request, Files, Hover, Definition);
++    }
++    return AnswerSuccess(Request.Kind, *Diagnostics, Hover, Definition);
++}
+diff --git a/Engine/Source/Programs/VerseCmd/Private/IdeRequest.h b/Engine/Source/Programs/VerseCmd/Private/IdeRequest.h
+new file mode 100644
+index 000000000000..6a1763471e4c
+--- /dev/null
++++ b/Engine/Source/Programs/VerseCmd/Private/IdeRequest.h
+@@ -0,0 +1,14 @@
++// Copyright (c) 2026 Naotsun
++
++// VersePlayground: the analysis mode of verse.exe for an editor. "verse --ide-request" reads one request as JSON from
++// stdin and writes the answer as one line of JSON to stdout: the diagnostics of the program in a folder, or the hover
++// text or the definition at a position in one of its files. The program and its build are the same as for a run.
++
++#pragma once
++
++#include "AutoRTFM.h"
++
++namespace VerseCmd {
++// Reads one request from stdin, answers it on stdout, and returns 0 when the answer is ok and 1 otherwise.
++AUTORTFM_DISABLE int RunIdeRequest();
++}
+diff --git a/Engine/Source/Programs/VerseCmd/Private/ProgramFiles.cpp b/Engine/Source/Programs/VerseCmd/Private/ProgramFiles.cpp
+new file mode 100644
+index 000000000000..feb9d1361df3
+--- /dev/null
++++ b/Engine/Source/Programs/VerseCmd/Private/ProgramFiles.cpp
+@@ -0,0 +1,129 @@
++// Copyright (c) 2026 Naotsun
++
++#include "ProgramFiles.h"
++#include "Containers/StringConv.h"
++#include "HAL/FileManager.h"
++#include "Misc/FileHelper.h"
++#include "Misc/Paths.h"
++#include "ULangUEUtils.h"
++#include "uLang/SourceProject/SourceDataProject.h"
++#include <stdio.h> // for fprintf
++
++AUTORTFM_DISABLE bool VerseCmd::ListProgramFiles(const FString& Folder, TArray<FString>& OutNames, FString& OutError)
++{
++    OutNames.Reset();
++
++    // The wildcard ignores case, so Main.VERSE belongs to the program as well. Folders named *.verse do not.
++    TArray<FString> Names;
++    IFileManager::Get().FindFiles(Names, *FPaths::Combine(Folder, TEXT("*.verse")), true, false);
++    if (Names.Num() > MaxProgramFiles)
++    {
++        OutError = FString::Printf(TEXT("'%s' has %d .verse files, more than the %d that one program may have."),
++                                   *Folder,
++                                   Names.Num(),
++                                   MaxProgramFiles);
++        return false;
++    }
++
++    int64 TotalBytes = 0;
++    for (const FString& Name : Names)
++    {
++        // FileSize returns -1 for a file deleted since it was listed, which then counts as empty.
++        TotalBytes += FMath::Max<int64>(0, IFileManager::Get().FileSize(*FPaths::Combine(Folder, Name)));
++    }
++    if (TotalBytes > MaxProgramBytes)
++    {
++        OutError = FString::Printf(
++            TEXT("The .verse files in '%s' add up to more than the %lld MB that one program may have."),
++            *Folder,
++            MaxProgramBytes / (1024 * 1024));
++        return false;
++    }
++
++    // FindFiles returns the names in no set order. Sorting them builds the program the same way on every run.
++    Names.Sort();
++    OutNames = MoveTemp(Names);
++    return true;
++}
++
++AUTORTFM_DISABLE TOptional<uLang::CUTF8String> VerseCmd::ReadTextWithoutByteOrderMark(const FString& FilePath)
++{
++    TArray<uint8> Bytes;
++    if (!FFileHelper::LoadFileToArray(Bytes, *FilePath, FILEREAD_Silent) || Bytes.Num() < 3 || Bytes[0] != 0xEF ||
++        Bytes[1] != 0xBB || Bytes[2] != 0xBF)
++    {
++        return {};
++    }
++
++    // The IDE reads the file on disk for an empty text, so a file with only the mark is compiled as one empty line.
++    if (Bytes.Num() == 3)
++    {
++        return uLang::CUTF8String("\n");
++    }
++    return uLang::CUTF8String(uLang::CUTF8StringView(reinterpret_cast<const char*>(Bytes.GetData() + 3),
++                                                     static_cast<size_t>(Bytes.Num() - 3)));
++}
++
++AUTORTFM_DISABLE TSharedRef<ISolIdeDataSource> VerseCmd::AddFileOnDisk(ISolarisIde& Ide,
++                                                                       const FString& FilePath,
++                                                                       uLang::CUTF8String SourcePath)
++{
++    TOptional<uLang::CUTF8String> TextWithoutMark = ReadTextWithoutByteOrderMark(FilePath);
++    if (TextWithoutMark)
++    {
++        return Ide.AddDataSource(
++            uLang::TSRef<uLang::CSourceDataSnippet>::New(MoveTemp(SourcePath), MoveTemp(*TextWithoutMark)));
++    }
++    return Ide.AddDataSource(SourcePath);
++}
++
++AUTORTFM_DISABLE TSharedRef<ISolIdeDataSource> VerseCmd::AddScriptSource(ISolarisIde& Ide,
++                                                                         const FUtf8String& ScriptFilePath)
++{
++    // The source path is ScriptFilePath converted directly, not through FString, so that the debugger sees the
++    // spelling that the client sends.
++    return AddFileOnDisk(Ide, FString(ScriptFilePath), FULangConversionUtils::FUtf8StringToULangStr(ScriptFilePath));
++}
++
++AUTORTFM_DISABLE TOptional<TArray<TSharedRef<ISolIdeDataSource>>> VerseCmd::AddProgramSources(
++    ISolarisIde& Ide, const FUtf8String& ScriptFilePath)
++{
++    // The folder part keeps the separators and the case of ScriptFilePath, and each file name is spelled as on disk.
++    // The debugger compares these paths with the ones that the client sends, which follow the same rule.
++    const FString ScriptPath(ScriptFilePath);
++    int32 SlashIndex = INDEX_NONE;
++    int32 BackslashIndex = INDEX_NONE;
++    ScriptPath.FindLastChar(TEXT('/'), SlashIndex);
++    ScriptPath.FindLastChar(TEXT('\\'), BackslashIndex);
++    const FString FolderPrefix = ScriptPath.Left(FMath::Max(SlashIndex, BackslashIndex) + 1);
++    if (FolderPrefix.IsEmpty())
++    {
++        // main makes the path absolute, so this is never expected. Listing "" would search the working directory,
++        // which UE sets to the engine folder, so the program stays the one file.
++        return TArray<TSharedRef<ISolIdeDataSource>>();
++    }
++
++    TArray<FString> Names;
++    FString Error;
++    if (!ListProgramFiles(FolderPrefix, Names, Error))
++    {
++        fprintf(stderr, "Error: %s\n", TCHAR_TO_UTF8(*Error));
++        return {};
++    }
++
++    // The IDE does not keep the data sources that it is given, so the caller keeps these until the build ends.
++    TArray<TSharedRef<ISolIdeDataSource>> Sources;
++    for (const FString& Name : Names)
++    {
++        const FString Path = FolderPrefix + Name;
++        // BuildScript has already added the file to run.
++        if (FPaths::IsSamePath(Path, ScriptPath))
++        {
++            continue;
++        }
++
++        const FUtf8String Utf8Path(StringCast<UTF8CHAR>(*Path).Get());
++        Sources.Add(AddFileOnDisk(Ide, Path, FULangConversionUtils::FUtf8StringToULangStr(Utf8Path)));
++    }
++    return MoveTemp(Sources);
++}
+diff --git a/Engine/Source/Programs/VerseCmd/Private/ProgramFiles.h b/Engine/Source/Programs/VerseCmd/Private/ProgramFiles.h
+new file mode 100644
+index 000000000000..294e5150a7c3
+--- /dev/null
++++ b/Engine/Source/Programs/VerseCmd/Private/ProgramFiles.h
+@@ -0,0 +1,52 @@
++// Copyright (c) 2026 Naotsun
++
++// VersePlayground: the .verse files that make up one program. verse.exe compiles every .verse file directly in the
++// folder of the file it runs, and an editor request checks the same files, so that the editor and a run agree.
++
++#pragma once
++
++#include "AutoRTFM.h"
++#include "Containers/Array.h"
++#include "Containers/UnrealString.h"
++#include "ISolarisIde.h"
++#include "Misc/Optional.h"
++#include "Templates/SharedPointer.h"
++
++namespace VerseCmd {
++// The most .verse files that one program may have. A folder of unrelated files, such as a download folder, would
++// otherwise make every run and every editor request compile all of them.
++constexpr int32 MaxProgramFiles = 500;
++
++// The most bytes that the .verse files of one program may add up to, for the same reason.
++constexpr int64 MaxProgramBytes = 32 * 1024 * 1024;
++
++// Lists the names of the .verse files directly in Folder, sorted, as spelled on disk. Subfolders are not searched.
++// Returns false and sets OutError when the folder holds more files or bytes than one program may have.
++[[nodiscard]] AUTORTFM_DISABLE bool ListProgramFiles(const FString& Folder,
++                                                     TArray<FString>& OutNames,
++                                                     FString& OutError);
++
++// Returns the text of a file on disk that starts with a UTF-8 byte order mark, without the mark. Returns an empty
++// optional for any other file, and for one that cannot be read, which the IDE then reads itself. The compiler would
++// count the mark as 3 bytes of the first line, while an editor shows the line without it, so the columns of the
++// first line would not match.
++[[nodiscard]] AUTORTFM_DISABLE TOptional<uLang::CUTF8String> ReadTextWithoutByteOrderMark(const FString& FilePath);
++
++// Adds the file on disk at FilePath to Ide as SourcePath and returns its data source, which the caller must keep until
++// the build ends. A file that starts with a UTF-8 byte order mark is added as its text without the mark, so that the
++// compiler counts the positions as an editor shows them. Any other file is added by its path.
++[[nodiscard]] AUTORTFM_DISABLE TSharedRef<ISolIdeDataSource> AddFileOnDisk(ISolarisIde& Ide,
++                                                                           const FString& FilePath,
++                                                                           uLang::CUTF8String SourcePath);
++
++// Adds the file to run as AddFileOnDisk does, with ScriptFilePath as both the file and the source path.
++[[nodiscard]] AUTORTFM_DISABLE TSharedRef<ISolIdeDataSource> AddScriptSource(ISolarisIde& Ide,
++                                                                             const FUtf8String& ScriptFilePath);
++
++// Adds the other .verse files in the folder of ScriptFilePath and returns their data sources, which the caller must
++// keep until the build ends. Each path is the folder part of ScriptFilePath, up to and including its last '\' or
++// '/', followed by the file name as spelled on disk, so the debugger sees the spelling that the client sends.
++// Prints the reason to stderr and returns an empty optional when the folder cannot be one program.
++[[nodiscard]] AUTORTFM_DISABLE TOptional<TArray<TSharedRef<ISolIdeDataSource>>> AddProgramSources(
++    ISolarisIde& Ide, const FUtf8String& ScriptFilePath);
++}
+diff --git a/Engine/Source/Programs/VerseCmd/Private/Script.cpp b/Engine/Source/Programs/VerseCmd/Private/Script.cpp
+index f8b709f78f42..11c6f5d9f6c4 100644
+--- a/Engine/Source/Programs/VerseCmd/Private/Script.cpp
++++ b/Engine/Source/Programs/VerseCmd/Private/Script.cpp
+@@ -10,2 +10,3 @@
+ #include "Misc/FileHelper.h"
++#include "ProgramFiles.h"
+ #include "SolBuildDiagnostic.h"
+@@ -77,4 +78,4 @@
+ 
+-AUTORTFM_DISABLE TSharedPtr<VerseCmd::FScript> VerseCmd::BuildScript(const FUtf8String& ScriptFilePath,
+-                                                                     const TArray<FMount>& Mounts)
++AUTORTFM_DISABLE TOptional<VerseCmd::FScriptIde>
++VerseCmd::MakeScriptIde(const TSharedRef<ISolarisIdeDiagnostics>& Diagnostics)
+ {
+@@ -84,3 +85,3 @@
+     TOptional<TSharedRef<ISolIdeSourceProject>> MaybeSourceProject = ISolarisModule::Get().CreateProjectSource(
+-        TEXT("VerseCmd"), ISolarisModule::EBuildMode::Incremental, MakeIdeDiagnostics(ReportSolDiagnostic));
++        TEXT("VerseCmd"), ISolarisModule::EBuildMode::Incremental, Diagnostics);
+     if (!MaybeSourceProject.IsSet())
+@@ -100,2 +101,21 @@
+     SolarisIde->SetSourceProject(SourceProject);
++    return FScriptIde{.Ide = SolarisIde, .SourceProject = SourceProject};
++}
++
++AUTORTFM_DISABLE FSolIdeBuildSettings VerseCmd::MakeProgramBuildSettings()
++{
++    return FSolIdeBuildSettings{.LinkSettings = uLang::SBuildParams::ELinkParam::RequireComplete};
++}
++
++AUTORTFM_DISABLE TSharedPtr<VerseCmd::FScript> VerseCmd::BuildScript(const FUtf8String& ScriptFilePath,
++                                                                     const TArray<FMount>& Mounts)
++{
++    // VersePlayground: the IDE and the build settings are shared with editor requests, so that they see the same
++    // program. ScriptIde keeps the source project until the build ends.
++    TOptional<FScriptIde> ScriptIde = MakeScriptIde(MakeIdeDiagnostics(ReportSolDiagnostic));
++    if (!ScriptIde)
++    {
++        return {};
++    }
++    TSharedRef<ISolarisIde> SolarisIde = ScriptIde->Ide;
+ 
+@@ -118,5 +138,12 @@
+     TSharedRef<ISolIdeDataSource> Script =
+-        SolarisIde->AddDataSource(FULangConversionUtils::FUtf8StringToULangStr(ScriptFilePath));
++        AddScriptSource(*SolarisIde, ScriptFilePath);
++    // VersePlayground: AddScriptSource leaves out a leading byte order mark, so that the positions of errors count as
++    // an editor shows them. The other .verse files in the folder belong to the same program and are added alike.
++    TOptional<TArray<TSharedRef<ISolIdeDataSource>>> ProgramSources = AddProgramSources(*SolarisIde, ScriptFilePath);
++    if (!ProgramSources)
++    {
++        return {};
++    }
+ 
+-    FSolIdeBuildSettings Settings{.LinkSettings = uLang::SBuildParams::ELinkParam::RequireComplete};
++    FSolIdeBuildSettings Settings = MakeProgramBuildSettings();
+     if (!SolarisIde->BuildAll(Settings, MakeIdeDiagnostics(ReportSolDiagnostic)))
+diff --git a/Engine/Source/Programs/VerseCmd/Private/Script.h b/Engine/Source/Programs/VerseCmd/Private/Script.h
+index 4a9146c20a0a..ae58186914dd 100644
+--- a/Engine/Source/Programs/VerseCmd/Private/Script.h
++++ b/Engine/Source/Programs/VerseCmd/Private/Script.h
+@@ -7,2 +7,3 @@
+ #include "Containers/UnrealString.h"
++#include "ISolarisIde.h"
+ #include "Templates/SharedPointer.h"
+@@ -23,2 +24,17 @@
+ 
++// VersePlayground: the IDE that a script and an editor request both build their program in. The caller keeps it,
++// SourceProject included, until the build ends.
++struct FScriptIde
++{
++    TSharedRef<ISolarisIde> Ide;
++    TSharedRef<ISolIdeSourceProject> SourceProject;
++};
++
++// VersePlayground: compiles the Verse code of verse.exe itself into a new IDE that is configured for a script, and
++// reports to Diagnostics. Returns an empty optional when that code fails to compile.
++AUTORTFM_DISABLE TOptional<FScriptIde> MakeScriptIde(const TSharedRef<ISolarisIdeDiagnostics>& Diagnostics);
++
++// VersePlayground: the settings that a script and an editor request both build their program with.
++AUTORTFM_DISABLE FSolIdeBuildSettings MakeProgramBuildSettings();
++
+ AUTORTFM_DISABLE TSharedPtr<FScript> BuildScript(const FUtf8String& ScriptFilePath, const TArray<FMount>& Mounts);
+diff --git a/Engine/Source/Programs/VerseCmd/Private/VerseCmd.cpp b/Engine/Source/Programs/VerseCmd/Private/VerseCmd.cpp
+index dfb4d51aa8c0..fe8fb4d66665 100644
+--- a/Engine/Source/Programs/VerseCmd/Private/VerseCmd.cpp
++++ b/Engine/Source/Programs/VerseCmd/Private/VerseCmd.cpp
+@@ -11,2 +11,3 @@
+ #include "ISolarisModule.h"
++#include "IdeRequest.h"
+ #include "Misc/CString.h"
+@@ -192,2 +193,8 @@
+ 
++    // VersePlayground: the editor sends one request on stdin and reads the answer from stdout. No script runs.
++    if (argc >= 2 && !strcmp(argv[1], "--ide-request"))
++    {
++        return VerseCmd::RunIdeRequest();
++    }
++
+     FVerseCmdCommandLine CommandLine;
+diff --git a/Engine/Source/Programs/VerseCmd/VerseCmd.Build.cs b/Engine/Source/Programs/VerseCmd/VerseCmd.Build.cs
+index 1532e02218ff..c7d57842c7d5 100644
+--- a/Engine/Source/Programs/VerseCmd/VerseCmd.Build.cs
++++ b/Engine/Source/Programs/VerseCmd/VerseCmd.Build.cs
+@@ -35,2 +35,3 @@
+ 		});
++		PrivateDependencyModuleNames.Add("VerseAssist"); // VersePlayground: editor requests
+ 
