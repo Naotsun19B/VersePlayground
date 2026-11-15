@@ -114,6 +114,8 @@ Main(Args:[]string, Env:[string]string)<suspends>:void =
 | ホバー、定義へ移動 | ホバーは定義のシグネチャと型を表示し、定義へ移動（F12）は同じフォルダの別ファイルやエンジンの `.verse` の宣言を開く。定義そのものの位置ではなく、定義を使っている側で使う。フォルダに構文エラーがある間は何も返さず、直すと戻る |
 | 補完 | UEFN の言語サーバーのときだけ（下記） |
 
+[![VS Code での入力中のエラー、ホバー、定義へ移動](images/LanguageServer.gif)](videos/LanguageServer.mp4)
+
 #### 言語サーバー
 
 既定（`versePlayground.languageServer.kind` = `builtin`）では、Setup が作った `verse.exe` でコードを解析するので、UEFN は

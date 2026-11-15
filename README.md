@@ -120,6 +120,8 @@ and the extension finds `verse.exe` by itself.
 | Hover, go to definition | Hover shows the signature and type of a definition, and go to definition (F12) opens it, in another file of the folder or in the engine's `.verse` declarations. Use them on a place that uses a definition, not on the definition itself. While the folder has a syntax error they return nothing; fix it and they come back |
 | Completion | Only with the UEFN language server (see below) |
 
+[![Errors while typing, hover, and go to definition in VS Code](images/LanguageServer.gif)](videos/LanguageServer.mp4)
+
 #### Language server
 
 By default (`versePlayground.languageServer.kind` = `builtin`), Verse Playground analyzes your code with the
