@@ -1,7 +1,9 @@
 // Copyright (c) 2026 Naotsun
 
-// Bundles the extension and its runtime dependencies into dist/extension.js, so the .vsix needs no node_modules,
-// writes dist/ThirdPartyNotices.txt with the license of every package that ended up in the bundle, and copies the
+// Bundles the extension into dist/extension.js and the language server into dist/server.js, each with its runtime
+// dependencies, so the .vsix needs no node_modules. Fails when dist/server.js would load vscode, which only exists
+// inside the extension host: the server runs in a plain Node process and would only break at run time. Writes
+// dist/ThirdPartyNotices.txt with the license of every package that ended up in either bundle, and copies the
 // repository's LICENSE next to package.json, where vsce looks for it.
 // Usage: node esbuild.mjs [--production] [--watch]
 import * as esbuild from 'esbuild';
@@ -11,15 +13,49 @@ import * as path from 'node:path';
 const isProduction = process.argv.includes('--production');
 const isWatch = process.argv.includes('--watch');
 
+/** The bundle of the language server, as esbuild names it in the metafile. */
+const SERVER_OUTPUT = 'dist/server.js';
+
+/** Returns the messages for every import of vscode that the language server bundle makes. */
+function findVscodeImportsOfServer(metafile) {
+  const serverOutput = metafile.outputs[SERVER_OUTPUT];
+  if (serverOutput === undefined) {
+    return [`${SERVER_OUTPUT} is missing from the build output.`];
+  }
+
+  return serverOutput.imports
+    .filter((serverImport) => serverImport.path === 'vscode' || serverImport.path.startsWith('vscode/'))
+    .map((serverImport) => `${SERVER_OUTPUT} imports "${serverImport.path}", which does not exist outside VS Code.`);
+}
+
+/** Reports a server bundle that imports vscode after every rebuild of the watch mode. */
+const checkServerImportsPlugin = {
+  name: 'check-server-imports',
+  setup(build) {
+    build.onEnd((result) => {
+      if (result.metafile === undefined) {
+        return;
+      }
+
+      for (const message of findVscodeImportsOfServer(result.metafile)) {
+        console.error(`error: ${message}`);
+      }
+    });
+  },
+};
+
 const buildOptions = {
-  entryPoints: ['src/extension.ts'],
+  entryPoints: {
+    extension: 'src/extension.ts',
+    server: 'src/server/main.ts',
+  },
   bundle: true,
-  outfile: 'dist/extension.js',
+  outdir: 'dist',
   platform: 'node',
   format: 'cjs',
-  // VS Code 1.91 runs extensions on Electron's Node 20.
+  // VS Code 1.91 runs extensions on Electron's Node 20, and the language server runs on the same Node.
   target: 'node20',
-  // Provided by VS Code at run time.
+  // Provided by VS Code at run time. Only the extension may use it.
   external: ['vscode'],
   sourcemap: !isProduction,
   minify: isProduction,
@@ -27,7 +63,7 @@ const buildOptions = {
   logLevel: 'info',
 };
 
-/** Writes the license texts of the npm packages whose files the bundle contains. */
+/** Writes the license texts of the npm packages whose files the bundles contain. */
 function writeThirdPartyNotices(metafile) {
   const packageNames = new Set();
   for (const inputPath of Object.keys(metafile.inputs)) {
@@ -62,10 +98,14 @@ function copyRepositoryLicense() {
 }
 
 if (isWatch) {
-  const context = await esbuild.context(buildOptions);
+  const context = await esbuild.context({ ...buildOptions, plugins: [checkServerImportsPlugin] });
   await context.watch();
 } else {
   const buildResult = await esbuild.build(buildOptions);
+  const importMessages = findVscodeImportsOfServer(buildResult.metafile);
+  if (importMessages.length > 0) {
+    throw new Error(importMessages.join('\n'));
+  }
   writeThirdPartyNotices(buildResult.metafile);
   copyRepositoryLicense();
 }

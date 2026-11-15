@@ -6,7 +6,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { test } from 'node:test';
 
-import { findEngine, isPathInside, LOCAL_STATE_FILE_NAME } from '../src/engine-locator.ts';
+import { findEngine, isPathInside, LOCAL_STATE_FILE_NAME } from '../src/shared/engine-locator.ts';
 
 /** Creates a temporary folder tree for one test and returns its root. */
 function makeTemporaryRoot(): string {
@@ -20,14 +20,14 @@ test('finds the local state file in a parent of the start folder', () => {
   fs.writeFileSync(path.join(repositoryRoot, LOCAL_STATE_FILE_NAME), JSON.stringify({ engineDir: 'D:\\Engine' }));
 
   const engine = findEngine('', [sampleFolder]);
-  assert.equal(engine?.engineDir, 'D:\\Engine');
-  assert.equal(engine?.versePath, path.join('D:\\Engine', 'Engine', 'Binaries', 'Win64', 'verse.exe'));
+  assert.equal(engine?.location.engineDir, 'D:\\Engine');
+  assert.equal(engine?.location.versePath, path.join('D:\\Engine', 'Engine', 'Binaries', 'Win64', 'verse.exe'));
 });
 
 test('prefers the configured engine folder over the local state file', () => {
   const repositoryRoot = makeTemporaryRoot();
   fs.writeFileSync(path.join(repositoryRoot, LOCAL_STATE_FILE_NAME), JSON.stringify({ engineDir: 'D:\\Engine' }));
-  assert.equal(findEngine('  E:\\Other  ', [repositoryRoot])?.engineDir, 'E:\\Other');
+  assert.equal(findEngine('  E:\\Other  ', [repositoryRoot])?.location.engineDir, 'E:\\Other');
 });
 
 test('skips a malformed local state file and keeps looking further up', () => {
@@ -36,7 +36,23 @@ test('skips a malformed local state file and keeps looking further up', () => {
   fs.mkdirSync(innerFolder);
   fs.writeFileSync(path.join(innerFolder, LOCAL_STATE_FILE_NAME), 'not json');
   fs.writeFileSync(path.join(repositoryRoot, LOCAL_STATE_FILE_NAME), JSON.stringify({ engineDir: 'D:\\Engine' }));
-  assert.equal(findEngine('', [innerFolder])?.engineDir, 'D:\\Engine');
+  assert.equal(findEngine('', [innerFolder])?.location.engineDir, 'D:\\Engine');
+});
+
+test('reports the setting as the source when the engine folder is configured', () => {
+  const repositoryRoot = makeTemporaryRoot();
+  fs.writeFileSync(path.join(repositoryRoot, LOCAL_STATE_FILE_NAME), JSON.stringify({ engineDir: 'D:\\Engine' }));
+  assert.deepEqual(findEngine('E:\\Other', [repositoryRoot])?.source, { kind: 'setting' });
+});
+
+test('reports the local state file that named the engine as the source', () => {
+  const repositoryRoot = makeTemporaryRoot();
+  const innerFolder = path.join(repositoryRoot, 'Inner');
+  fs.mkdirSync(innerFolder);
+  fs.writeFileSync(path.join(innerFolder, LOCAL_STATE_FILE_NAME), 'not json');
+  const stateFilePath = path.join(repositoryRoot, LOCAL_STATE_FILE_NAME);
+  fs.writeFileSync(stateFilePath, JSON.stringify({ engineDir: 'D:\\Engine' }));
+  assert.deepEqual(findEngine('', [innerFolder])?.source, { kind: 'localState', stateFilePath });
 });
 
 test('returns undefined when nothing is found', () => {

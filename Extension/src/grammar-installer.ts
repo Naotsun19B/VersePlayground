@@ -3,7 +3,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import type { EngineLocation } from './engine-locator.ts';
+import type { EngineLocation } from './shared/engine-locator.ts';
 
 /**
  * Result of {@link installGrammar}.

@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Naotsun
 
 import { execFile } from 'node:child_process';
+import { readdirSync } from 'node:fs';
 import * as net from 'node:net';
 import * as path from 'node:path';
 import { BreakpointEvent, DebugSession, Event, InitializedEvent, OutputEvent, TerminatedEvent } from '@vscode/debugadapter';
@@ -10,6 +11,7 @@ import { getServerFrames, isConstructorWrapperFrame, toClientStackTrace } from '
 import { toClientVariables } from './debug-values.ts';
 import { DEBUGGER_PORT, encodeHandshake, encodeMessage, MessageReader } from './debug-wire.ts';
 import type { FirstBreakpoint } from './debug-wire.ts';
+import { toDebuggerPath } from './shared/program-paths.ts';
 
 /** Launch configuration of a Verse debugging session, after the extension filled in versePath. */
 export interface VerseLaunchArguments extends DebugProtocol.LaunchRequestArguments {
@@ -426,11 +428,12 @@ export class VerseDebugSession extends DebugSession {
   }
 
   /**
-   * verse.exe compares file names as plain strings, while VS Code may spell the same file with a different drive
-   * letter case. The program file is renamed to the exact spelling passed to verse.exe; other files are left alone.
+   * verse.exe compares file names as plain strings, while VS Code may spell the same file differently (drive letter
+   * case, separators, file name case). The program and the files next to it are renamed to the spelling verse.exe
+   * uses; files of other folders are left alone.
    */
   private toServerPath(clientPath: string): string {
-    return (clientPath.toLowerCase() === this.programPath.toLowerCase() ? this.programPath : clientPath);
+    return toDebuggerPath(clientPath, this.programPath, listFolderFiles);
   }
 
   /** Tells VS Code that the program ended, once. */
@@ -444,6 +447,15 @@ export class VerseDebugSession extends DebugSession {
     }
     this.pendingResponses.clear();
     this.sendEvent(new TerminatedEvent());
+  }
+}
+
+/** Lists the file names in a folder as spelled on disk, or none when the folder cannot be read. */
+function listFolderFiles(folderPath: string): readonly string[] {
+  try {
+    return readdirSync(folderPath);
+  } catch {
+    return [];
   }
 }
 

@@ -5,7 +5,8 @@ import * as vscode from 'vscode';
 
 import { pickArgumentLine } from './argument-picker.ts';
 import { splitArguments } from './command-line.ts';
-import type { EngineLocation } from './engine-locator.ts';
+import { saveAllDocuments, selectUnsavedProgramDocuments } from './program-documents.ts';
+import type { EngineLocation } from './shared/engine-locator.ts';
 
 /** Task type declared in package.json under taskDefinitions. */
 const TASK_TYPE = 'verse';
@@ -13,8 +14,11 @@ const TASK_TYPE = 'verse';
 /** Problem matcher declared in package.json. It turns compiler errors into entries of the Problems panel. */
 const PROBLEM_MATCHER = '$verse';
 
-/** Returns the engine to run with, or undefined after telling the user that none was found. */
-export type EngineProvider = () => EngineLocation | undefined;
+/**
+ * Returns the engine to run with, or undefined after telling the user that none was found.
+ * `startFolder` is the folder of the program, where the search for the engine begins.
+ */
+export type EngineProvider = (startFolder?: string) => EngineLocation | undefined;
 
 /** Returns whether the language server already reports the problems of the file, so running it needs no matcher. */
 export type LanguageServerCoverage = (uri: vscode.Uri) => boolean;
@@ -62,12 +66,12 @@ async function runActiveFile(
     return;
   }
 
-  const engine = getEngine();
+  const filePath = document.uri.fsPath;
+  const engine = getEngine(path.dirname(filePath));
   if (engine === undefined) {
     return;
   }
 
-  const filePath = document.uri.fsPath;
   const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
   const task = new vscode.Task(
     { type: TASK_TYPE, file: filePath, args: [...programArguments] },
@@ -104,9 +108,22 @@ export async function saveActiveVerseDocument(): Promise<vscode.TextDocument | u
     return undefined;
   }
 
-  if (document.isDirty && !(await document.save())) {
-    void vscode.window.showWarningMessage('The Verse file could not be saved, so it was not run.');
+  if (!(await saveProgramDocuments(document.uri.fsPath))) {
     return undefined;
   }
   return document;
+}
+
+/**
+ * Saves every unsaved Verse file of the program's folder, because verse.exe compiles the whole folder from disk.
+ * Shows a warning and returns false when a file cannot be saved, so that stale files are never run.
+ */
+export async function saveProgramDocuments(programPath: string): Promise<boolean> {
+  const unsavedDocuments = selectUnsavedProgramDocuments(vscode.workspace.textDocuments, programPath);
+  if (await saveAllDocuments(unsavedDocuments, (unsavedDocument) => unsavedDocument.save())) {
+    return true;
+  }
+
+  void vscode.window.showWarningMessage('A Verse file of this folder could not be saved, so it was not run.');
+  return false;
 }

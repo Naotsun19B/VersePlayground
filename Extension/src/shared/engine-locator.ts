@@ -3,6 +3,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+import type { EngineSource } from './protocol-types.ts';
+
 /** Name of the file that Setup.bat writes next to itself to record where the engine checkout is. */
 export const LOCAL_STATE_FILE_NAME = 'VersePlayground.local.json';
 
@@ -27,26 +29,44 @@ export interface EngineLocation {
   languageConfigurationPath: string;
 }
 
+/** How an engine checkout was found. Defined in protocol-types.ts, which the approveEngine request also uses. */
+export type { EngineSource };
+
+/** An engine checkout together with the way it was found, which decides whether it can be used without asking. */
+export interface EngineResolution {
+  /** The files of the engine checkout. */
+  location: EngineLocation;
+
+  /** Where the engine folder came from. */
+  source: EngineSource;
+}
+
 /**
  * Resolves the engine checkout to use.
  *
  * A non-empty `configuredEngineDir` wins. Otherwise each start folder and its parents are searched for the local state
  * file that Setup.bat writes, so opening the repository root or any folder below it works.
  *
- * @returns The engine location, or undefined when no engine was found.
+ * @returns The engine location and how it was found, or undefined when no engine was found.
  */
 export function findEngine(
   configuredEngineDir: string,
   startFolders: readonly string[],
-): EngineLocation | undefined {
+): EngineResolution | undefined {
   if (configuredEngineDir.trim() !== '') {
-    return toEngineLocation(configuredEngineDir.trim());
+    return {
+      location: toEngineLocation(configuredEngineDir.trim()),
+      source: { kind: 'setting' },
+    };
   }
 
   for (const startFolder of startFolders) {
-    const stateEngineDir = readEngineDirFromLocalState(startFolder);
-    if (stateEngineDir !== undefined) {
-      return toEngineLocation(stateEngineDir);
+    const localState = readEngineDirFromLocalState(startFolder);
+    if (localState !== undefined) {
+      return {
+        location: toEngineLocation(localState.engineDir),
+        source: { kind: 'localState', stateFilePath: localState.stateFilePath },
+      };
     }
   }
   return undefined;
@@ -74,15 +94,17 @@ export function isPathInside(childPath: string, parentPath: string): boolean {
 }
 
 /**
- * Walks from `startFolder` up to the drive root and returns `engineDir` from the first local state file found.
- * A file that cannot be read or parsed is skipped, so a broken file in one folder does not hide one further up.
+ * Walks from `startFolder` up to the drive root and returns `engineDir` and the file it came from, taken from the first
+ * local state file found. A file that cannot be read or parsed is skipped, so a broken file in one folder does not
+ * hide one further up.
  */
-function readEngineDirFromLocalState(startFolder: string): string | undefined {
+function readEngineDirFromLocalState(startFolder: string): { engineDir: string; stateFilePath: string } | undefined {
   let currentFolder = path.resolve(startFolder);
   for (;;) {
-    const stateEngineDir = tryReadEngineDir(path.join(currentFolder, LOCAL_STATE_FILE_NAME));
+    const stateFilePath = path.join(currentFolder, LOCAL_STATE_FILE_NAME);
+    const stateEngineDir = tryReadEngineDir(stateFilePath);
     if (stateEngineDir !== undefined) {
-      return stateEngineDir;
+      return { engineDir: stateEngineDir, stateFilePath };
     }
 
     const parentFolder = path.dirname(currentFolder);

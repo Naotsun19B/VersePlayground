@@ -1,8 +1,8 @@
 {
   "name": "verse-playground",
   "displayName": "Verse Playground",
-  "description": "Run, debug and edit single Verse programs with the verse.exe that VersePlayground builds from Unreal Engine 6.",
-  "version": "0.1.5",
+  "description": "Run, debug and edit Verse programs, one folder per program, with the verse.exe that VersePlayground builds from Unreal Engine 6.",
+  "version": "0.1.6",
   "publisher": "naotsun19b",
   "license": "MIT",
   "repository": {
@@ -21,6 +21,12 @@
     "workspaceContains:**/*.verse",
     "onDebugResolve:verse"
   ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Verse Playground starts verse.exe, whose location can come from files in the workspace, so it is disabled until you trust the workspace."
+    }
+  },
   "contributes": {
     "languages": [
       {
@@ -70,6 +76,11 @@
       {
         "command": "versePlayground.restartLanguageServer",
         "title": "Restart Language Server",
+        "category": "Verse"
+      },
+      {
+        "command": "versePlayground.forgetAllowedEngines",
+        "title": "Forget Allowed Engines",
         "category": "Verse"
       }
     ],
@@ -148,12 +159,25 @@
         "versePlayground.languageServer.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Start the Verse language server for diagnostics, hover, go to definition and completion."
+          "description": "Start the Verse language server for diagnostics, hover and go to definition. With the UEFN language server it also provides completion."
+        },
+        "versePlayground.languageServer.kind": {
+          "type": "string",
+          "enum": [
+            "builtin",
+            "uefn"
+          ],
+          "enumDescriptions": [
+            "Analyze with the verse.exe that Setup.bat built, using the same compiler that runs your program.",
+            "Use the language server (verse-lsp.exe) that UEFN ships."
+          ],
+          "default": "builtin",
+          "description": "Which language server provides diagnostics, hover and go to definition."
         },
         "versePlayground.languageServer.path": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Path to `verse-lsp.exe`. When empty, the extension uses the one bundled with the UEFN Verse extension (`epicgames.verse`), whether that extension is enabled or not."
+          "markdownDescription": "Path to `verse-lsp.exe`. Used only when `#versePlayground.languageServer.kind#` is `uefn`. When empty, the extension uses the one bundled with the UEFN Verse extension (`epicgames.verse`), whether that extension is enabled or not."
         }
       }
     },
@@ -166,7 +190,7 @@
         "properties": {
           "file": {
             "type": "string",
-            "description": "The Verse file to run."
+            "description": "A Verse file of the folder to run. Every .verse file in its folder is compiled as one program."
           },
           "args": {
             "type": "array",
@@ -219,7 +243,7 @@
             "properties": {
               "program": {
                 "type": "string",
-                "description": "The Verse file to debug.",
+                "description": "A Verse file of the folder to debug. Every .verse file in its folder is compiled as one program.",
                 "default": "${file}"
               },
               "args": {
@@ -263,13 +287,15 @@
   "scripts": {
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit -p tsconfig.server.json && tsc --noEmit",
     "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"test/**/*.test.ts\"",
     "package": "npm run typecheck && npm test && node esbuild.mjs --production && vsce package --no-dependencies --out verse-playground.vsix"
   },
   "dependencies": {
     "@vscode/debugadapter": "1.68.0",
-    "vscode-languageclient": "10.1.2"
+    "vscode-languageclient": "10.1.2",
+    "vscode-languageserver": "10.1.2",
+    "vscode-languageserver-textdocument": "1.0.15"
   },
   "devDependencies": {
     "@types/node": "22.19.1",

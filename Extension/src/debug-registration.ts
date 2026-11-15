@@ -1,11 +1,13 @@
 // Copyright (c) 2026 Naotsun
 
+import * as path from 'node:path';
 import * as vscode from 'vscode';
 
 import { pickArgumentLine } from './argument-picker.ts';
 import { splitArguments } from './command-line.ts';
+import { resolveProgramPath } from './program-documents.ts';
 import type { EngineProvider } from './run-commands.ts';
-import { saveActiveVerseDocument } from './run-commands.ts';
+import { saveActiveVerseDocument, saveProgramDocuments } from './run-commands.ts';
 import { VerseDebugSession } from './verse-debug-session.ts';
 
 /** Debug type declared in package.json under debuggers. */
@@ -55,17 +57,17 @@ async function debugActiveFile(programArguments: readonly string[]): Promise<voi
 
 /** Fills in a Verse launch configuration so that F5 works without a launch.json. */
 class VerseDebugConfigurationProvider implements vscode.DebugConfigurationProvider {
-  // Finds the engine whose verse.exe runs the program.
+  // Finds the engine whose verse.exe runs the program, searching from the folder of the program.
   private readonly getEngine: EngineProvider;
 
-  /** @param getEngine Finds the engine whose verse.exe runs the program. */
+  /** @param getEngine Finds the engine whose verse.exe runs the program, searching from the folder of the program. */
   constructor(getEngine: EngineProvider) {
     this.getEngine = getEngine;
   }
 
   /**
-   * Turns an empty configuration (F5 with no launch.json) into one that debugs the active file, and adds the path of
-   * verse.exe. Returns undefined to cancel when there is nothing to debug or no engine.
+   * Turns an empty configuration (F5 with no launch.json) into one that debugs the active file. Returns undefined to
+   * cancel when there is nothing to debug.
    */
   resolveDebugConfiguration(
     _folder: vscode.WorkspaceFolder | undefined,
@@ -84,11 +86,35 @@ class VerseDebugConfigurationProvider implements vscode.DebugConfigurationProvid
       resolvedConfiguration.program = '${file}';
     }
 
-    const engine = this.getEngine();
+    return resolvedConfiguration;
+  }
+
+  /**
+   * Runs after VS Code substituted the variables of the configuration, so `program` is final here. Makes it an
+   * absolute path, saves the unsaved Verse files of its folder, and adds the path of the verse.exe that belongs to that
+   * folder. This runs for launch.json and the Run and Debug view as well as for the commands. Returns undefined to
+   * cancel when the program is unknown, a file cannot be saved, or there is no engine.
+   */
+  async resolveDebugConfigurationWithSubstitutedVariables(
+    folder: vscode.WorkspaceFolder | undefined,
+    debugConfiguration: vscode.DebugConfiguration,
+  ): Promise<vscode.DebugConfiguration | undefined> {
+    const programPath = resolveProgramPath(debugConfiguration.program, folder?.uri.fsPath);
+    if (programPath === undefined) {
+      void vscode.window.showWarningMessage(
+        'The program to debug is not an absolute path, and there is no workspace folder to resolve it against.',
+      );
+      return undefined;
+    }
+
+    if (!(await saveProgramDocuments(programPath))) {
+      return undefined;
+    }
+
+    const engine = this.getEngine(path.dirname(programPath));
     if (engine === undefined) {
       return undefined;
     }
-    resolvedConfiguration.versePath = engine.versePath;
-    return resolvedConfiguration;
+    return { ...debugConfiguration, program: programPath, versePath: engine.versePath };
   }
 }
