@@ -60,7 +60,10 @@ UnrealEngine\Engine\Binaries\Win64\verse.exe Samples\HelloWorld\HelloWorld.verse
 UnrealEngine\Engine\Binaries\Win64\verse.exe Samples\HelloWorld\HelloWorld.verse Verse
 ```
 
-`verse.exe` calls `Main` in the file. Arguments after the script path are passed in `Args`.
+`verse.exe` compiles every `.verse` file directly in the folder of the file you give it as one program (up to 500
+files and 32 MB; subfolders are not included) and calls `Main`. A function written in another file of the same folder
+can be used. Arguments after the script path are passed in `Args`. This needs the `verse-ide-analysis` engine patch
+(see [Engine patches](#engine-patches)).
 
 ```verse
 Main(Args:[]string, Env:[string]string)<suspends>:void =
@@ -71,8 +74,9 @@ Compile errors are printed as `file(line,column,line,column): Verse compiler err
 
 ### Samples
 
-Each sample is a folder with one program in it. Keep to one program per folder for your own code too: the VS Code
-language server checks all files in a folder together, so two `Main` functions in one folder conflict.
+Each sample is a folder with one program in it. Keep to one program per folder for your own code too: running,
+debugging and the VS Code checks all treat the `.verse` files of a folder as one program, so two `Main` functions in
+one folder conflict (a "duplicate definition" compile error).
 
 | File | Shows |
 |---|---|
@@ -97,7 +101,8 @@ language server checks all files in a folder together, so two `Main` functions i
 - Fortnite and UEFN APIs (`/Fortnite.com/...`, `/UnrealEngine.com/...`) are not available, and `@editable` stops the
   script with a runtime error. Code from UEFN tutorials may not run as is.
 - `verse.exe` has a `--mount` option for loading modules from other folders, but it is not implemented yet.
-  Define modules in the same file as `Main`.
+  Put the code in the folder of `Main` instead: every `.verse` file in that folder is compiled together, and a module
+  can be defined in any of them.
 
 ## VS Code
 
@@ -107,18 +112,44 @@ and the extension finds `verse.exe` by itself.
 
 | Feature | Details |
 |---|---|
-| Run | The ▶ button in the editor title, or Ctrl+F5, runs the open file in a terminal, so `InputLine` works. To change the key, search for "Verse: Run Verse File" in Keyboard Shortcuts (Ctrl+K Ctrl+S) |
+| Run | The ▶ button in the editor title, or Ctrl+F5, runs the folder of the open file as one program in a terminal, so `InputLine` works. Unsaved `.verse` files of the folder are saved first; if one cannot be saved, the run is cancelled. To change the key, search for "Verse: Run Verse File" in Keyboard Shortcuts (Ctrl+K Ctrl+S) |
 | Arguments | Ctrl+Shift+F5 ("Verse: Run Verse File with Arguments...") or Shift+F5 ("Verse: Debug Verse File with Arguments...") asks for the arguments passed in `Args`. Each `.verse` file remembers the arguments used with it; pick one with the up and down keys, newest first |
-| Debug | The button next to it, or F5. Breakpoints, step over / into / out, the call stack, and local variables in the Variables view. A breakpoint on a line that calls a Verse function stops again when the call returns |
-| Syntax highlighting | Copied from your engine checkout the first time the extension starts. Reload the window when it asks |
-| Errors | Compile errors from running a file appear in the Problems panel |
-| Errors while typing, hover, go to definition, completion | Needs the Verse language server, see below |
+| Debug | The button next to it, or F5. Breakpoints, step over / into / out, the call stack, and local variables in the Variables view. A breakpoint on a line that calls a Verse function stops again when the call returns. The whole folder is the program, so a breakpoint in another file of the folder stops too |
+| Syntax highlighting | Copied from your engine checkout the first time the extension starts, after you allow that engine (see below). Reload the window when it asks |
+| Errors while typing | Errors and warnings of every `.verse` file in the folder appear in the Problems panel as soon as you open a file, and follow your edits without saving. They come from the `verse.exe` that runs the folder, so they match the compile errors of a run |
+| Hover, go to definition | Hover shows the signature and type of a definition, and go to definition (F12) opens it, in another file of the folder or in the engine's `.verse` declarations. Use them on a place that uses a definition, not on the definition itself. While the folder has a syntax error they return nothing; fix it and they come back |
+| Completion | Only with the UEFN language server (see below) |
 
-The language server is not part of this repository or of the Unreal Engine source. It comes with the Verse extension
-(`epicgames.verse`) that UEFN installs into VS Code, which is not on the VS Code Marketplace. If you have UEFN, Verse
-Playground uses that server with the Verse version of your engine checkout. Disable the UEFN Verse extension for the
-workspace, or both servers run and every error is shown twice; Verse Playground tells you when it is enabled. Without
-UEFN, everything else in the table still works.
+#### Language server
+
+By default (`versePlayground.languageServer.kind` = `builtin`), Verse Playground analyzes your code with the
+`verse.exe` that Setup built, so UEFN is not needed. This needs an engine version with the `verse-ide-analysis` patch
+(see [Engine patches](#engine-patches)), which is applied to `ue6-main-f9f48a4bf1b9` and `ue6-main-7dc0dff55638`.
+If your `verse.exe` was built before this patch or from another version, the extension says so once; run `Setup.bat`
+again with one of those versions, then run "Verse: Restart Language Server" (or reload the window). Files in the engine
+checkout and new files that were never saved are not checked. Do not put a `.verse` file directly in a drive root such
+as `C:\`; put it in a folder.
+
+To use the language server of UEFN instead, set `versePlayground.languageServer.kind` to `uefn`. That server comes with
+the Verse extension (`epicgames.verse`) that UEFN installs into VS Code, which is not on the VS Code Marketplace. It is
+not part of this repository or of the Unreal Engine source. It runs with the Verse version of your engine checkout,
+gives completion as well, and `versePlayground.languageServer.path` can point to its `verse-lsp.exe`. A path you set
+before is used only after you choose `uefn`.
+
+Whichever you choose, disable the UEFN Verse extension for the workspace: when it is enabled, Verse Playground does
+not start its own server, because both servers would run and every error would be shown twice. Verse Playground tells
+you when it is enabled. `versePlayground.languageServer.enabled` turns the language server off; the compile errors of
+a run still appear in the Problems panel.
+
+#### Allowing an engine to run
+
+The built-in analysis starts the engine's `verse.exe`. It does so without asking for an engine you set in your user
+settings, and for the engine that Setup created for a workspace you trust. For any other engine (a file opened
+without a folder, a file outside the workspace, or an engine named in the workspace settings) a notification asks
+once whether that `verse.exe` may run. "Allow" is remembered; "Don't allow" (or closing the notification) stops the
+checks of those folders in that window. "Verse: Restart Language Server" asks again, and "Verse: Forget Allowed
+Engines" clears everything you allowed. Running and debugging are not affected. In a workspace you have not trusted
+(Restricted Mode), the language server does not start.
 
 ## Versions
 
@@ -154,6 +185,7 @@ checkout to another version, so switching versions and choosing other patches bo
 |---|---|
 | `debugger-constructor-self` | Debugging ends `verse.exe` when it stops inside a `<constructor>` function, or in a function that one calls. The engine calls the wrapper it generates for a constructor function without a Self, and the debugger stops the program when it lists a call stack with such a frame |
 | `verse-simulation-sleep` | `verse.exe` has no `Sleep`, and `GetSecondsSinceEpoch` returns the start time for the whole run. It links Epic's VerseSimulation module, which declares `Sleep` and `GetSimulationElapsedTime`, and implements them for a program without a game world: the clock advances each time the script resumes, and `Sleep` waits in real time, without counting the time stopped at a breakpoint |
+| `verse-ide-analysis` | `verse.exe` compiles only the file it runs, so a function in another file of the same folder cannot be called, and an editor cannot check Verse code with the compiler that runs it. It makes `verse.exe` compile every `.verse` file directly in the folder as one program (up to 500 files and 32 MB), and adds `--ide-request`, which answers one editor request on stdin and stdout: the diagnostics of a folder, or the hover text or the definition at a position. It links Epic's VerseAssist module. Applies to `ue6-main-f9f48a4bf1b9` and `ue6-main-7dc0dff55638` |
 
 #### Rules for publishing a patch
 
